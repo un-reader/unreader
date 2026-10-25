@@ -208,6 +208,16 @@ async function initDatabase() {
         "level-data" TEXT NOT NULL
       );
 
+      CREATE TABLE IF NOT EXISTS portal2d_demos (
+        id SERIAL PRIMARY KEY,
+        username VARCHAR(100) NOT NULL REFERENCES users(username) ON DELETE CASCADE,
+        demo_name VARCHAR(100) NOT NULL,
+        demo_data TEXT NOT NULL,
+        created_at BIGINT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS portal2d_demos_owner_idx
+        ON portal2d_demos (username, id DESC);
+
       CREATE TABLE IF NOT EXISTS suggestions (
         id SERIAL PRIMARY KEY,
         date DATE NOT NULL,
@@ -2214,6 +2224,9 @@ const P2D_MAX_HAZARDS = 60;
 const P2D_MAX_EXTRAS = 40;
 const P2D_MAX_WIRES = 120;
 const P2D_MAX_DATA_CHARS = 90000;
+const P2D_MAX_DEMO_CHARS = 700000;
+const P2D_MAX_DEMO_FRAMES = 1201;
+const P2D_MAX_DEMOS_PER_USER = 20;
 const P2D_MAX_PACKS_PER_USER = 25;
 const P2D_PAGE_SIZE = 10;
 const P2D_OFFICIAL = '[official]';
@@ -2411,12 +2424,210 @@ function p2dBlockedUser(user) {
   return null;
 }
 
+function p2dNormalizeDemo(input, fallbackName) {
+  let raw = input;
+  if (typeof raw === 'string') {
+    try {
+      raw = JSON.parse(raw);
+    } catch {
+      throw new Error('Demo data is invalid JSON.');
+    }
+  }
+  if (
+    !raw ||
+    raw.format !== 'unreader.portal.demo' ||
+    raw.version !== 1 ||
+    raw.type !== 'gameplay' ||
+    !Array.isArray(raw.frames) ||
+    raw.frames.length < 2 ||
+    raw.frames.length > P2D_MAX_DEMO_FRAMES
+  ) {
+    throw new Error('This is not a supported UnReader Portal demo.');
+  }
+  const duration = p2dInt(raw.duration, 1, 120000);
+  if (duration < 100) throw new Error('Demo recording is too short.');
+  const levelPack = p2dNormalizePack(
+    { name: fallbackName, levels: [raw.level] },
+    fallbackName,
+    1,
+  );
+  const number = (value, min, max, label) => {
+    if (!Number.isFinite(Number(value)))
+      throw new Error(`Demo ${label} is invalid.`);
+    return p2dNum(value, min, max);
+  };
+  const point = (value, label) => {
+    if (value === null || value === undefined) return null;
+    if (!value || typeof value !== 'object')
+      throw new Error(`Demo ${label} is invalid.`);
+    return {
+      x: number(value.x, -100, P2D_CANVAS_W + 100, `${label} x`),
+      y: number(value.y, -100, P2D_CANVAS_H + 100, `${label} y`),
+      angle: number(value.angle, -20, 20, `${label} angle`),
+      normal: {
+        x: number(value.normal?.x, -1, 1, `${label} normal`),
+        y: number(value.normal?.y, -1, 1, `${label} normal`),
+      },
+    };
+  };
+  let previousAt = -1;
+  const frames = raw.frames.map((frame) => {
+    if (!frame || typeof frame !== 'object')
+      throw new Error('Demo contains an invalid frame.');
+    const at = p2dInt(frame.at, 0, duration);
+    if (at < previousAt) throw new Error('Demo frames are out of order.');
+    previousAt = at;
+    if (!frame.player || typeof frame.player !== 'object')
+      throw new Error('Demo player state is missing.');
+    const player = {
+      x: number(frame.player.x, -100, P2D_CANVAS_W + 100, 'player x'),
+      y: number(frame.player.y, -100, P2D_CANVAS_H + 100, 'player y'),
+      vx: number(frame.player.vx, -100, 100, 'player velocity'),
+      vy: number(frame.player.vy, -100, 100, 'player velocity'),
+      push: number(frame.player.push || 0, -100, 100, 'player push'),
+      lockPush: !!frame.player.lockPush,
+      onGround: !!frame.player.onGround,
+    };
+    const rawAim = frame.aim || { x: 0, y: -1, active: false, magnitude: 0 };
+    const aim = {
+      x: number(rawAim.x, -1, 1, 'aim x'),
+      y: number(rawAim.y, -1, 1, 'aim y'),
+      active: !!rawAim.active,
+      magnitude: number(rawAim.magnitude || 0, 0, 1, 'aim magnitude'),
+    };
+    if (!Array.isArray(frame.cubes) || frame.cubes.length > P2D_MAX_EXTRAS)
+      throw new Error('Demo cube state is invalid.');
+    const cubes = frame.cubes.map((cube) => ({
+      x: number(cube.x, -100, P2D_CANVAS_W + 100, 'cube x'),
+      y: number(cube.y, -100, P2D_CANVAS_H + 100, 'cube y'),
+      w: p2dInt(cube.w, 1, 100, 'cube width'),
+      h: p2dInt(cube.h, 1, 100, 'cube height'),
+      vx: number(cube.vx || 0, -100, 100, 'cube velocity'),
+      vy: number(cube.vy || 0, -100, 100, 'cube velocity'),
+    }));
+    const boolList = (list, label) => {
+      if (!Array.isArray(list) || list.length > P2D_MAX_EXTRAS)
+        throw new Error(`Demo ${label} state is invalid.`);
+      return list.map(Boolean);
+    };
+    return {
+      at,
+      player,
+      aim,
+      portalA: point(frame.portalA, 'blue portal'),
+      portalB: point(frame.portalB, 'orange portal'),
+      cubes,
+      portalGunStage: p2dInt(frame.portalGunStage, 0, 2),
+      levelClear: !!frame.levelClear,
+      buttons: boolList(frame.buttons, 'button'),
+      triggers: boolList(frame.triggers, 'trigger'),
+      laserTriggers: boolList(frame.laserTriggers, 'laser trigger'),
+      upgrades: boolList(frame.upgrades, 'upgrade'),
+    };
+  });
+  return {
+    format: 'unreader.portal.demo',
+    version: 1,
+    type: 'gameplay',
+    demoType: 4,
+    duration,
+    level: levelPack.levels[0],
+    frames,
+  };
+}
+
 app.get('/api/portal2d/me', authenticateToken, (req, res) => {
   res.json({
     username: req.user.username,
     isAdmin: p2dIsAdmin(req.user),
     isStaff: p2dIsStaff(req.user),
   });
+});
+
+app.get('/api/portal2d/demos', authenticateToken, async (req, res) => {
+  try {
+    const r = await db.query(
+      `SELECT id, demo_name AS name, 4 AS "demoType", created_at AS "createdAt"
+       FROM portal2d_demos WHERE username = $1 ORDER BY id DESC LIMIT 100;`,
+      [req.user.username],
+    );
+    res.json({ demos: r.rows });
+  } catch (err) {
+    log('Portal2D demo list failure:', err.message);
+    res.status(500).json({ error: 'Could not load saved demos.' });
+  }
+});
+
+app.get('/api/portal2d/demos/:id', authenticateToken, async (req, res) => {
+  try {
+    const id = p2dParseId(req.params.id);
+    if (!id) return res.status(400).json({ error: 'Invalid demo ID.' });
+    const r = await db.query(
+      `SELECT id, demo_name AS name, demo_data AS data, created_at AS "createdAt"
+       FROM portal2d_demos WHERE id = $1 AND username = $2;`,
+      [id, req.user.username],
+    );
+    if (!r.rows[0]) return res.status(404).json({ error: 'Demo not found.' });
+    try {
+      r.rows[0].data = JSON.parse(r.rows[0].data);
+    } catch {
+      return res.status(500).json({ error: 'Stored demo data is corrupted.' });
+    }
+    res.json(r.rows[0]);
+  } catch (err) {
+    log('Portal2D demo fetch failure:', err.message);
+    res.status(500).json({ error: 'Could not load demo.' });
+  }
+});
+
+app.post('/api/portal2d/demos', authenticateToken, async (req, res) => {
+  try {
+    const blocked = p2dBlockedUser(req.user);
+    if (blocked) return res.status(403).json({ error: blocked });
+    const name = p2dName(req.body?.name, 'Untitled demo', 100);
+    let demo;
+    try {
+      demo = p2dNormalizeDemo(req.body?.data, name);
+    } catch (err) {
+      return res.status(400).json({ error: err.message });
+    }
+    const json = JSON.stringify(demo);
+    if (json.length > P2D_MAX_DEMO_CHARS)
+      return res.status(413).json({ error: 'Demo is too large to save.' });
+    const count = await db.query(
+      'SELECT COUNT(*)::int AS n FROM portal2d_demos WHERE username = $1;',
+      [req.user.username],
+    );
+    if (count.rows[0].n >= P2D_MAX_DEMOS_PER_USER)
+      return res.status(400).json({
+        error: `You can save up to ${P2D_MAX_DEMOS_PER_USER} demos. Delete one first.`,
+      });
+    const saved = await db.query(
+      `INSERT INTO portal2d_demos (username, demo_name, demo_data, created_at)
+       VALUES ($1, $2, $3, $4) RETURNING id;`,
+      [req.user.username, name, json, Date.now()],
+    );
+    res.json({ success: true, id: saved.rows[0].id });
+  } catch (err) {
+    log('Portal2D demo save failure:', err.message);
+    res.status(500).json({ error: 'Could not save demo.' });
+  }
+});
+
+app.delete('/api/portal2d/demos/:id', authenticateToken, async (req, res) => {
+  try {
+    const id = p2dParseId(req.params.id);
+    if (!id) return res.status(400).json({ error: 'Invalid demo ID.' });
+    const deleted = await db.query(
+      'DELETE FROM portal2d_demos WHERE id = $1 AND username = $2 RETURNING id;',
+      [id, req.user.username],
+    );
+    if (!deleted.rows[0]) return res.status(404).json({ error: 'Demo not found.' });
+    res.json({ success: true });
+  } catch (err) {
+    log('Portal2D demo delete failure:', err.message);
+    res.status(500).json({ error: 'Could not delete demo.' });
+  }
 });
 
 app.get('/api/portal2d/levels', authenticateToken, async (req, res) => {

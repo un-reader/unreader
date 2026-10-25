@@ -35,6 +35,11 @@
         .hud-name { flex: 1; min-width: 0; margin: 0 8px; overflow: hidden; text-overflow: ellipsis; font-weight: normal; }
         .hud-stats .stat { margin-left: 12px; }
 
+        .demo-controls { display: none; order: 10; margin-top: 6px; padding: 8px; border: 2px solid #000; background: #f0f0f0; }
+        body[data-mode="play"] .demo-controls { display: block; }
+        .demo-actions { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); grid-gap: 6px; }
+        .demo-status { margin-top: 6px; font: 11px/1.4 "Courier New", monospace; }
+
         .canvas-wrap { position: relative; padding-top: 62.5%; border: 2px solid #000; background: #1a1a2e; }
         .canvas-wrap canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; display: block; image-rendering: pixelated; touch-action: none; }
 
@@ -162,6 +167,15 @@
 
             <div class="canvas-wrap">
                 <canvas id="game" width="640" height="400"></canvas>
+            </div>
+
+            <div class="demo-controls" id="demo-controls">
+                <div class="demo-actions">
+                    <button class="btn" id="demo-record-start" type="button" onclick="startPortalDemoRecording()">RECORD DEMO</button>
+                    <button class="btn" id="demo-record-stop" type="button" onclick="stopPortalDemoRecording()" disabled>STOP &amp; SAVE</button>
+                    <button class="btn" id="demo-list" type="button" onclick="listPortalDemos()">MY DEMOS</button>
+                </div>
+                <div class="demo-status" id="demo-status" role="status" aria-live="polite">Demos are stored in your UnReader account, not on this device.</div>
             </div>
 
             <div class="aim-indicator" id="aim-indicator">AIM: centered</div>
@@ -405,6 +419,8 @@
 
             var modalCallback = null;
             var modalCancelCallback = null;
+            var demoRecording = null;
+            var demoPlayback = null;
 
             var packs = [];
             var activePackId = 'builtin';
@@ -1448,6 +1464,8 @@
 
             // ---------- Mode switching ----------
             window.switchMode = function(newMode) {
+                if (demoRecording && newMode !== 'play') { toast('STOP AND SAVE THE RECORDING FIRST'); return; }
+                if (demoPlayback) stopPortalDemoPlayback();
                 if (newMode === 'edit') {
                     var ownPacks = [];
                     for (var pi = 0; pi < packs.length; pi++) if (packs[pi].id !== 'builtin') ownPacks.push(packs[pi]);
@@ -1528,6 +1546,7 @@
                 if (!levels.length) return;
                 if (index < 0) index = 0;
                 if (index >= levels.length) index = levels.length - 1;
+                if (demoRecording && index !== levelIndex) stopPortalDemoRecording();
                 if (advanceTimer) { clearTimeout(advanceTimer); advanceTimer = null; }
                 levelIndex = index;
                 var lvl = levels[index];
@@ -3463,10 +3482,340 @@
                 }
             };
 
+            function setDemoStatus(message) {
+                document.getElementById('demo-status').innerText = message;
+            }
+            function snapshotDemoFrame(at) {
+                var lvl = levels[levelIndex];
+                function clone(value) { return value ? JSON.parse(JSON.stringify(value)) : null; }
+                return {
+                    at: at,
+                    player: {
+                        x: player.x, y: player.y, vx: player.vx, vy: player.vy,
+                        push: player.push || 0, lockPush: !!player.lockPush, onGround: !!player.onGround
+                    },
+                    aim: { x: aimX, y: aimY, active: !!aimActive, magnitude: aimMagnitude },
+                    portalA: clone(portalA),
+                    portalB: clone(portalB),
+                    cubes: cubes.map(function (item) {
+                        return { x: item.x, y: item.y, w: item.w, h: item.h, vx: item.vx || 0, vy: item.vy || 0 };
+                    }),
+                    portalGunStage: portalGunStage,
+                    levelClear: !!levelClear,
+                    buttons: (lvl.buttons || []).map(function (item) { return !!item.pressed; }),
+                    triggers: (lvl.triggers || []).map(function (item) { return !!item.active; }),
+                    laserTriggers: (lvl.laserTriggers || []).map(function (item) { return !!item.active; }),
+                    upgrades: (lvl.portalGunUpgrades || []).map(function (item) { return !!item.collected; })
+                };
+            }
+            function captureDemoFrame(force) {
+                if (!demoRecording) return;
+                var now = Date.now();
+                var at = Math.min(120000, now - demoRecording.startedAt);
+                if (!force && at - demoRecording.lastAt < 100) return;
+                demoRecording.lastAt = at;
+                demoRecording.data.frames.push(snapshotDemoFrame(at));
+                demoRecording.data.duration = at;
+                if (at >= 120000 || demoRecording.data.frames.length >= 1201) stopPortalDemoRecording();
+            }
+            window.startPortalDemoRecording = function() {
+                if (mode !== 'play' || demoPlayback) { toast('DEMOS RECORD IN PLAY MODE'); return; }
+                if (!getToken()) { showModal('Log in from the home page to save a demo to your account.', false); return; }
+                demoRecording = {
+                    startedAt: Date.now(),
+                    lastAt: -100,
+                    data: {
+                        format: 'unreader.portal.demo', version: 1, type: 'gameplay', demoType: 4, duration: 0,
+                        level: cleanLevel(levels[levelIndex]), frames: []
+                    }
+                };
+                captureDemoFrame(true);
+                document.getElementById('demo-record-start').disabled = true;
+                document.getElementById('demo-record-stop').disabled = false;
+                setDemoStatus('RECORDING • MAX 2 MINUTES • SAVES TO YOUR ACCOUNT');
+            };
+            window.stopPortalDemoRecording = function() {
+                if (!demoRecording) return;
+                var recording = demoRecording;
+                demoRecording = null;
+                var finalAt = Math.min(120000, Date.now() - recording.startedAt);
+                if (finalAt > recording.lastAt) {
+                    recording.data.frames.push(snapshotDemoFrame(finalAt));
+                    recording.data.duration = finalAt;
+                }
+                var data = recording.data;
+                document.getElementById('demo-record-start').disabled = false;
+                document.getElementById('demo-record-stop').disabled = true;
+                if (data.frames.length < 2) { setDemoStatus('RECORDING TOO SHORT'); return; }
+                showPrompt('Save this demo to your UnReader account as:', levels[levelIndex].name + ' demo', function(name) {
+                    name = (name || '').replace(/^\s+|\s+$/g, '');
+                    if (!name) { setDemoStatus('DEMO NOT SAVED'); return; }
+                    setDemoStatus('SAVING TO SERVER...');
+                    api('POST', '/api/portal2d/demos', { name: name, data: data }, function(err, result) {
+                        if (err) { setDemoStatus('SAVE FAILED: ' + err.error); showModal('Demo save failed: ' + err.error, false); return; }
+                        setDemoStatus('SAVED TO ACCOUNT • DEMO #' + result.id);
+                        toast('DEMO SAVED');
+                    });
+                });
+            };
+            function applyDemoFrame(frame) {
+                player.x = frame.player.x; player.y = frame.player.y;
+                player.vx = frame.player.vx; player.vy = frame.player.vy;
+                player.push = frame.player.push; player.lockPush = frame.player.lockPush;
+                player.onGround = frame.player.onGround;
+                var demoAim = frame.aim || { x: 0, y: -1, active: false, magnitude: 0 };
+                aimX = demoAim.x; aimY = demoAim.y;
+                aimActive = demoAim.active; aimMagnitude = demoAim.magnitude;
+                portalA = frame.portalA ? JSON.parse(JSON.stringify(frame.portalA)) : null;
+                portalB = frame.portalB ? JSON.parse(JSON.stringify(frame.portalB)) : null;
+                cubes = frame.cubes.map(function (item) { return JSON.parse(JSON.stringify(item)); });
+                cube = cubes.length ? cubes[0] : null;
+                portalGunStage = frame.portalGunStage;
+                levelClear = frame.levelClear;
+                var lvl = levels[0];
+                (lvl.buttons || []).forEach(function (item, i) { item.pressed = !!frame.buttons[i]; });
+                (lvl.triggers || []).forEach(function (item, i) { item.active = !!frame.triggers[i]; });
+                (lvl.laserTriggers || []).forEach(function (item, i) { item.active = !!frame.laserTriggers[i]; });
+                (lvl.portalGunUpgrades || []).forEach(function (item, i) { item.collected = !!frame.upgrades[i]; });
+                if (frame.ended && (!demoPlayback || !demoPlayback.consoleOnly)) setDemoStatus('TYPE 2 • PLAYER DIED • DEMO ENDED');
+                computeSnap();
+                if (!demoPlayback || !demoPlayback.consoleOnly) updateAimIndicator();
+                updatePortalCount();
+            }
+            function finishPortalDemoPlayback() {
+                if (!demoPlayback) return;
+                var backup = demoPlayback.backup;
+                var demoType = demoPlayback.data.demoType;
+                var consoleOnly = demoPlayback.consoleOnly;
+                demoPlayback = null;
+                levels = backup.levels;
+                switchMode(backup.mode);
+                loadLevel(backup.levelIndex);
+                if (!consoleOnly) setDemoStatus(demoType === 2 ? 'TYPE 2 • PLAYER DIED • DEMO ENDED' : 'DEMO PLAYBACK COMPLETE');
+            }
+            window.stopPortalDemoPlayback = finishPortalDemoPlayback;
+            function playPortalDemoData(data, consoleOnly) {
+                if (demoRecording) {
+                    if (consoleOnly) return;
+                    showModal('Stop and save your current recording before playing another demo.', false);
+                    return;
+                }
+                if (!data || data.format !== 'unreader.portal.demo' || data.version !== 1 ||
+                    data.type !== 'gameplay' || !Array.isArray(data.frames) || data.frames.length < 2 ||
+                    (data.demoType !== 1 && data.demoType !== 2 && data.demoType !== 3 && data.demoType !== 4)) {
+                    if (consoleOnly) console.error('This saved demo is invalid or uses an unsupported format.');
+                    else showModal('This saved demo is invalid or uses an unsupported format.', false);
+                    return;
+                }
+                var backup = { levels: levels, levelIndex: levelIndex, mode: mode };
+                switchMode('play');
+                levels = [cleanLevel(data.level)];
+                loadLevel(0);
+                demoPlayback = {
+                    data: data, startedAt: Date.now(), backup: backup, frameIndex: 0,
+                    consoleOnly: !!consoleOnly
+                };
+                if (!consoleOnly) setDemoStatus('TYPE ' + data.demoType + ' • PLAYING DEMO');
+            }
+            window.playPortalDemo = function(id) {
+                api('GET', '/api/portal2d/demos/' + parseInt(id, 10), null, function(err, result) {
+                    if (err) { showModal('Could not load demo: ' + err.error, false); return; }
+                    playPortalDemoData(result.data);
+                });
+            };
+            window.listPortalDemos = function() {
+                api('GET', '/api/portal2d/demos', null, function(err, result) {
+                    if (err) { showModal('Could not load your demos: ' + err.error, false); return; }
+                    var html = '';
+                    if (!result.demos.length) html = '<div class="list-item">No saved demos yet. Record a run to add one.</div>';
+                    result.demos.forEach(function(item) {
+                        var id = parseInt(item.id, 10);
+                        var date = new Date(Number(item.createdAt)).toLocaleString();
+                        html += '<div class="list-item"><b>' + escapeHtml(item.name) + '</b> • TYPE ' + (parseInt(item.demoType, 10) || 4) + '<br>' + escapeHtml(date) + '<br>' +
+                            '<button onclick="playPortalDemo(' + id + ')">PLAY</button> ' +
+                            '<button onclick="deletePortalDemo(' + id + ')">DELETE</button></div>';
+                    });
+                    showListModal('MY SAVED DEMOS', html);
+                });
+            };
+            window.deletePortalDemo = function(id) {
+                showConfirm('Delete demo #' + id + ' from your account?', function(yes) {
+                    if (!yes) { listPortalDemos(); return; }
+                    api('DELETE', '/api/portal2d/demos/' + parseInt(id, 10), null, function(err) {
+                        if (err) { showModal('Could not delete demo: ' + err.error, false); return; }
+                        listPortalDemos();
+                    });
+                });
+            };
+
+            function createInterlopeDemo(type) {
+                var lvl = levels[levelIndex];
+                var data = {
+                    format: 'unreader.portal.demo', version: 1, type: 'gameplay', demoType: type,
+                    duration: type === 1 ? 4200 : (type === 2 ? 6500 : 12000),
+                    level: cleanLevel(lvl), frames: []
+                };
+                function frame(at) {
+                    var result = snapshotDemoFrame(at);
+                    result.at = at;
+                    return result;
+                }
+                if (type === 1) {
+                    for (var aimFrame = 0; aimFrame <= 21; aimFrame++) {
+                        var row = frame(aimFrame * 200);
+                        var angle = Math.random() * Math.PI * 2;
+                        row.aim.x = Math.cos(angle);
+                        row.aim.y = Math.sin(angle);
+                        row.aim.active = true;
+                        row.aim.magnitude = 1;
+                        data.frames.push(row);
+                    }
+                    data.frames[data.frames.length - 1].aim.x = 0;
+                    data.frames[data.frames.length - 1].aim.y = -1;
+                    data.frames[data.frames.length - 1].aim.active = false;
+                } else if (type === 2) {
+                    var start = frame(0);
+                    start.player.x = Math.max(0, Math.min(W - PLAYER_SIZE, lvl.start.x));
+                    start.player.y = -60;
+                    start.player.vx = 0; start.player.vy = 0; start.player.onGround = false;
+                    var wait = frame(4800);
+                    wait.player = JSON.parse(JSON.stringify(start.player));
+                    var dead = frame(5200);
+                    dead.player.x = start.player.x; dead.player.y = H + 120;
+                    dead.player.vx = 0; dead.player.vy = 0; dead.player.onGround = false;
+                    dead.ended = true;
+                    var end = frame(6500);
+                    end.player = JSON.parse(JSON.stringify(dead.player)); end.ended = true;
+                    data.frames = [start, wait, dead, end];
+                } else {
+                    var sim = { x: lvl.start.x, y: lvl.start.y, vx: 0, vy: 0, onGround: false };
+                    var platformsForWalk = lvl.platforms || [];
+                    var direction = 0;
+                    var blue = null, orange = null;
+                    for (var i = 0; i <= 120; i++) {
+                        var at = i * 100;
+                        for (var step = 0; step < 6; step++) {
+                            if (Math.random() < 0.12) direction = Math.floor(Math.random() * 3) - 1;
+                            if (direction < 0) sim.vx = -MOVE_SPEED;
+                            else if (direction > 0) sim.vx = MOVE_SPEED;
+                            else { sim.vx *= 0.8; if (Math.abs(sim.vx) < 0.1) sim.vx = 0; }
+                            if (sim.onGround && Math.random() < 0.025) {
+                                sim.vy = JUMP_FORCE;
+                                sim.onGround = false;
+                            }
+                            sim.vy = Math.min(MAX_FALL_SPEED, sim.vy + GRAVITY);
+                            sim.x += sim.vx;
+                            for (var pi = 0; pi < platformsForWalk.length; pi++) {
+                                var side = platformsForWalk[pi];
+                                if (sim.x < side.x + side.w && sim.x + PLAYER_SIZE > side.x && sim.y < side.y + side.h && sim.y + PLAYER_SIZE > side.y) {
+                                    sim.x = sim.vx > 0 ? side.x - PLAYER_SIZE : side.x + side.w;
+                                    sim.vx = 0;
+                                }
+                            }
+                            var oldY = sim.y;
+                            sim.y += sim.vy;
+                            sim.onGround = false;
+                            for (var pj = 0; pj < platformsForWalk.length; pj++) {
+                                var floor = platformsForWalk[pj];
+                                if (sim.x < floor.x + floor.w && sim.x + PLAYER_SIZE > floor.x && sim.y < floor.y + floor.h && sim.y + PLAYER_SIZE > floor.y) {
+                                    if (sim.vy >= 0 && oldY + PLAYER_SIZE <= floor.y + 2) {
+                                        sim.y = floor.y - PLAYER_SIZE;
+                                        sim.vy = 0;
+                                        sim.onGround = true;
+                                    } else if (sim.vy < 0) {
+                                        sim.y = floor.y + floor.h;
+                                        sim.vy = 0;
+                                    }
+                                }
+                            }
+                            sim.x = Math.max(0, Math.min(W - PLAYER_SIZE, sim.x));
+                            if (sim.y > H + 40) {
+                                sim.x = lvl.start.x;
+                                sim.y = lvl.start.y;
+                                sim.vx = 0; sim.vy = 0;
+                            }
+                        }
+                        if (platformsForWalk.length && Math.random() < 0.04) {
+                            var surface = platformsForWalk[Math.floor(Math.random() * platformsForWalk.length)];
+                            var portal = { x: surface.x + Math.random() * surface.w, y: surface.y, angle: 0, normal: { x: 0, y: -1 } };
+                            if (Math.random() < 0.5) blue = portal; else orange = portal;
+                        }
+                        var row = frame(at);
+                        row.player.x = sim.x; row.player.y = sim.y;
+                        row.player.vx = sim.vx; row.player.vy = sim.vy;
+                        row.player.onGround = sim.onGround;
+                        row.portalA = blue ? JSON.parse(JSON.stringify(blue)) : null;
+                        row.portalB = orange ? JSON.parse(JSON.stringify(orange)) : null;
+                        data.frames.push(row);
+                    }
+                }
+                return data;
+            }
+
+            function runInterlopeDemo() {
+                if (demoRecording || demoPlayback) return;
+                var roll = Math.random();
+                var type = roll < 0.8 ? 1 : (roll < 0.92 ? 2 : (roll < 0.985 ? 3 : 4));
+                if (type !== 4) { playPortalDemoData(createInterlopeDemo(type), true); return; }
+                api('GET', '/api/portal2d/demos', null, function(err, result) {
+                    if (err || !result.demos.length) {
+                        playPortalDemoData(createInterlopeDemo(3), true);
+                        return;
+                    }
+                    var selected = result.demos[Math.floor(Math.random() * result.demos.length)];
+                    api('GET', '/api/portal2d/demos/' + parseInt(selected.id, 10), null, function(loadErr, saved) {
+                        if (loadErr) { playPortalDemoData(createInterlopeDemo(3), true); return; }
+                        playPortalDemoData(saved.data, true);
+                    });
+                });
+            }
+            window.addEventListener('interlope:generate', runInterlopeDemo);
+
+            function interpolateDemoFrame(frames, index, elapsed) {
+                var before = frames[index];
+                var after = frames[index + 1];
+                if (!after || after.at <= before.at) return before;
+                var ratio = Math.max(0, Math.min(1, (elapsed - before.at) / (after.at - before.at)));
+                var result = Object.assign({}, before);
+                result.player = Object.assign({}, before.player);
+                ['x', 'y', 'vx', 'vy', 'push'].forEach(function (key) {
+                    result.player[key] = before.player[key] + (after.player[key] - before.player[key]) * ratio;
+                });
+                if (before.aim && after.aim) {
+                    result.aim = Object.assign({}, before.aim);
+                    var ax = before.aim.x + (after.aim.x - before.aim.x) * ratio;
+                    var ay = before.aim.y + (after.aim.y - before.aim.y) * ratio;
+                    var aimLength = Math.sqrt(ax * ax + ay * ay) || 1;
+                    result.aim.x = ax / aimLength;
+                    result.aim.y = ay / aimLength;
+                    result.aim.magnitude = before.aim.magnitude + (after.aim.magnitude - before.aim.magnitude) * ratio;
+                }
+                if (before.cubes && after.cubes && before.cubes.length === after.cubes.length) {
+                    result.cubes = before.cubes.map(function (cube, cubeIndex) {
+                        var nextCube = after.cubes[cubeIndex];
+                        var interpolated = Object.assign({}, cube);
+                        ['x', 'y', 'vx', 'vy'].forEach(function (key) {
+                            interpolated[key] = cube[key] + (nextCube[key] - cube[key]) * ratio;
+                        });
+                        return interpolated;
+                    });
+                }
+                return result;
+            }
+
             // ---------- Game loop ----------
             function gameLoop() {
                 refreshSnapIfPlay();
-                update();
+                if (demoPlayback) {
+                    var elapsed = Date.now() - demoPlayback.startedAt;
+                    var frames = demoPlayback.data.frames;
+                    while (demoPlayback.frameIndex + 1 < frames.length && frames[demoPlayback.frameIndex + 1].at <= elapsed) demoPlayback.frameIndex++;
+                    applyDemoFrame(interpolateDemoFrame(frames, demoPlayback.frameIndex, elapsed));
+                    if (elapsed >= demoPlayback.data.duration) finishPortalDemoPlayback();
+                } else {
+                    update();
+                    captureDemoFrame(false);
+                }
                 render();
                 requestAnimationFrame(gameLoop);
             }
@@ -3480,6 +3829,34 @@
             gameLoop();
             if (getToken()) refreshViewer();
 
+        })();
+    </script>
+    <script src="interlope.js"></script>
+    <script>
+        (function () {
+            function startDemo() {
+                var output = [
+                    'getting socket for s.interlope.pull...',
+                    'extracting data from terminal',
+                    'submitting envelope',
+                    'received',
+                    'request from archive submitted',
+                    'Message from server administrator:',
+                    'CONGRATULATIONS AND WELCOME',
+                    'PLEASE ENTER WITH CAUTION',
+                    'YOU ARE NOT WELCOME HERE'
+                ];
+                var index = 0;
+                function printNext() {
+                    console.log(output[index]);
+                    index++;
+                    if (index < output.length) setTimeout(printNext, 350);
+                    else window.dispatchEvent(new CustomEvent('interlope:generate'));
+                }
+                printNext();
+            }
+            window.addEventListener('interlope:pull', startDemo);
+            if (new URLSearchParams(window.location.search).get('interlope') === '1') startDemo();
         })();
     </script>
 
