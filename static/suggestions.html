@@ -101,6 +101,12 @@
         .replace(/'/g, "&#39;");
     }
 
+    function decodeEntities(str) {
+      var text = document.createElement("textarea");
+      text.innerHTML = String(str == null ? "" : str);
+      return text.value;
+    }
+
     function setStatus(msg) {
       var el = document.getElementById("status-log");
       el.textContent = msg;
@@ -217,7 +223,7 @@
         html += '<div class="card-done">COMPLETED</div>';
       }
       if (post.admin_filter) {
-        html += '<div class="card-status">STATUS: ' + escapeHtml(post.admin_filter) + '</div>';
+        html += '<div class="card-status">STATUS: ' + escapeHtml(decodeEntities(post.admin_filter)) + '</div>';
       }
       html += '<div class="card-desc">' + escapeHtml(desc) + '</div>';
       html += '<div class="card-meta">#' + post.id + '</div>';
