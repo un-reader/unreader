@@ -6,7 +6,7 @@ A retro, brutalist, e-ink style Bulletin Board System (BBS) designed for ultra-l
 
 ## Usage
 
-go to: https://unreader-2lz0.onrender.com or https://unreader.netlify.app (More backups set up later.)
+go to: https://unreader-2lz0.onrender.com, https://unreader.netlify.app or https://unreader.duckdns.org/ (More backups set up later.)
 
 ## Key Features
 
