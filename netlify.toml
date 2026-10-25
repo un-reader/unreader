@@ -1,0 +1,16 @@
+[build]
+  command = "npm install"
+  publish = "static"
+
+[functions]
+  directory = "netlify/functions"
+  # Bundle dependencies so ESM-only packages (e.g. htmlparser2, used by
+  # sanitize-html) are converted for the function runtime.
+  node_bundler = "esbuild"
+
+# Files in static/ are served directly by the CDN. Any request that doesn't
+# match a static file falls through to the Express server function.
+[[redirects]]
+  from = "/*"
+  to = "/.netlify/functions/server/:splat"
+  status = 200

@@ -6,7 +6,7 @@ import jwt from 'jsonwebtoken';
 import pkg from 'pg';
 import cors from 'cors';
 import sanitizeHtml from 'sanitize-html';
-import { JSDOM } from 'jsdom';
+import { pathToFileURL } from 'node:url';
 
 const { Pool } = pkg;
 const JWT_SECRET = process.env.JWT_SECRET || 'brutalist_secret_key_123';
@@ -2675,10 +2675,19 @@ app.delete('/api/portal2d/official', authenticateToken, async (req, res) => {
     });
 });
 
-const server = app.listen(process.env.PORT || 10000, '0.0.0.0', () =>
-  log(`Node strictly bound to port: ${process.env.PORT || 10000}`),
-);
-const wss = new WebSocketServer({ server });
+// Only bind a port when run directly (`node index.js`, e.g. on Render). When
+// imported by the Netlify Function, the app is exported instead and the
+// WebSocket server stays detached.
+const isMainModule =
+  !!process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
+const server = isMainModule
+  ? app.listen(process.env.PORT || 10000, '0.0.0.0', () =>
+      log(`Node strictly bound to port: ${process.env.PORT || 10000}`),
+    )
+  : null;
+const wss = server
+  ? new WebSocketServer({ server })
+  : new WebSocketServer({ noServer: true });
 
 const WS_HEARTBEAT_MS = Number(process.env.WS_HEARTBEAT_MS || 30000);
 const heartbeatTimer = setInterval(() => {
@@ -3251,3 +3260,5 @@ wss.on('connection', (ws, req) => {
     }
   });
 });
+
+export { app, databaseReady };
