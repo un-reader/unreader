@@ -3262,3 +3262,4 @@ wss.on('connection', (ws, req) => {
 });
 
 export { app, databaseReady };
+export default app;
