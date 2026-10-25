@@ -200,6 +200,22 @@
   margin-left: 8px;
 }
 
+#chat-cell #input-bar-container {
+  align-items: center;
+}
+
+#chat-cell #scrshare,
+#chat-cell #send {
+  box-sizing: border-box;
+  width: 48px;
+  min-width: 48px;
+  max-width: 48px;
+  height: 48px;
+  flex: 0 0 48px;
+  padding: 0;
+  align-self: center;
+}
+
 .message-text {
   font-size: 13px;
   white-space: pre-wrap;
