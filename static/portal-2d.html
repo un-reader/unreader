@@ -2286,6 +2286,23 @@
                 delete c._ok;
                 return c;
             }
+            function portalLevelDemoKey(level) {
+                function ordered(value) {
+                    if (Array.isArray(value)) return value.map(ordered);
+                    if (value && typeof value === 'object') {
+                        var result = {};
+                        Object.keys(value).sort().forEach(function(key) {
+                            if (key !== '_ok' && key !== 'pressed' && key !== 'active' && key !== 'collected') result[key] = ordered(value[key]);
+                        });
+                        return result;
+                    }
+                    return value;
+                }
+                var source = JSON.stringify(ordered(cleanLevel(level)));
+                var hash = 0x811c9dc5;
+                for (var i = 0; i < source.length; i++) hash = Math.imul(hash ^ source.charCodeAt(i), 0x01000193) >>> 0;
+                return 'p2d-' + ('00000000' + hash.toString(16)).slice(-8);
+            }
             function cleanLevels(arr) {
                 var out = [];
                 for (var i = 0; i < arr.length; i++) out.push(cleanLevel(arr[i]));
@@ -3562,7 +3579,7 @@
                     startedTick: gameTick,
                     data: {
                         format: 'unreader.portal.demo', version: 3, type: 'gameplay', demoType: 4, duration: 0,
-                        level: cleanLevel(levels[levelIndex]), events: []
+                        level: cleanLevel(levels[levelIndex]), levelKey: portalLevelDemoKey(levels[levelIndex]), events: []
                     }
                 };
                 recordDemoAim(true);
@@ -3701,8 +3718,8 @@
                 });
             };
 
-            function createInterlopeDemo(type) {
-                var lvl = levels[levelIndex];
+            function createInterlopeDemo(type, sourceLevel) {
+                var lvl = sourceLevel || levels[levelIndex];
                 var data = {
                     format: 'unreader.portal.demo', version: type === 2 ? 1 : 3, type: 'gameplay', demoType: type,
                     duration: type === 1 ? 252 : (type === 2 ? 6500 : 720),
@@ -3760,18 +3777,50 @@
 
             function runInterlopeDemo() {
                 if (demoRecording || demoPlayback) return;
-                var roll = Math.random();
-                var type = roll < 0.8 ? 1 : (roll < 0.92 ? 2 : (roll < 0.985 ? 3 : 4));
-                if (type !== 4) { playPortalDemoData(createInterlopeDemo(type), true); return; }
-                api('GET', '/api/portal2d/demos', null, function(err, result) {
-                    if (err || !result.demos.length) {
-                        playPortalDemoData(createInterlopeDemo(3), true);
+                var local = [];
+                packs.forEach(function(pack) {
+                    (pack.levels || []).forEach(function(level) {
+                        if (level) local.push(cleanLevel(level));
+                    });
+                });
+                function chooseLevel(serverLevels) {
+                    var choices = local.concat(serverLevels || []);
+                    if (!choices.length) return;
+                    var selectedLevel = choices[Math.floor(Math.random() * choices.length)];
+                    var roll = Math.random();
+                    var type = roll < 0.8 ? 1 : (roll < 0.92 ? 2 : (roll < 0.985 ? 3 : 4));
+                    if (type !== 4 || !getToken()) {
+                        playPortalDemoData(createInterlopeDemo(type === 4 ? 3 : type, selectedLevel), true);
                         return;
                     }
-                    var selected = result.demos[Math.floor(Math.random() * result.demos.length)];
-                    api('GET', '/api/portal2d/demos/' + parseInt(selected.id, 10), null, function(loadErr, saved) {
-                        if (loadErr) { playPortalDemoData(createInterlopeDemo(3), true); return; }
-                        playPortalDemoData(saved.data, true);
+                    var levelKey = portalLevelDemoKey(selectedLevel);
+                    api('GET', '/api/portal2d/demos', null, function(err, result) {
+                        if (err || !result.demos.length) {
+                            playPortalDemoData(createInterlopeDemo(3, selectedLevel), true);
+                            return;
+                        }
+                        var matching = result.demos.filter(function(demo) {
+                            return demo.levelKey === levelKey || (!demo.levelKey && demo.levelName === selectedLevel.name);
+                        });
+                        if (!matching.length) {
+                            playPortalDemoData(createInterlopeDemo(3, selectedLevel), true);
+                            return;
+                        }
+                        var demo = matching[Math.floor(Math.random() * matching.length)];
+                        api('GET', '/api/portal2d/demos/' + parseInt(demo.id, 10), null, function(loadErr, saved) {
+                            if (loadErr) { playPortalDemoData(createInterlopeDemo(3, selectedLevel), true); return; }
+                            playPortalDemoData(saved.data, true);
+                        });
+                    });
+                }
+                if (!getToken()) { chooseLevel([]); return; }
+                api('GET', '/api/portal2d/levels?index=0', null, function(err, result) {
+                    if (err || !result.levels || !result.levels.length) { chooseLevel([]); return; }
+                    var pack = result.levels[Math.floor(Math.random() * result.levels.length)];
+                    api('GET', '/api/portal2d/levels/' + parseInt(pack.id, 10), null, function(loadErr, remote) {
+                        var serverLevels = !loadErr && remote.data && Array.isArray(remote.data.levels)
+                            ? remote.data.levels.map(cleanLevel) : [];
+                        chooseLevel(serverLevels);
                     });
                 });
             }

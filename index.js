@@ -2471,7 +2471,9 @@ function p2dNormalizeDemo(input, fallbackName) {
     });
     return {
       format: 'unreader.portal.demo', version: raw.version, type: 'gameplay',
-      demoType: 4, duration, level: levelPack.levels[0], events,
+      demoType: 4, duration, level: levelPack.levels[0],
+      levelKey: /^p2d-[0-9a-f]{8}$/.test(raw.levelKey || '') ? raw.levelKey : null,
+      events,
     };
   }
   if (raw.version !== 1 || !Array.isArray(raw.frames) || raw.frames.length < 2 || raw.frames.length > P2D_MAX_DEMO_FRAMES)
@@ -2557,6 +2559,7 @@ function p2dNormalizeDemo(input, fallbackName) {
     demoType: 4,
     duration,
     level: levelPack.levels[0],
+    levelKey: /^p2d-[0-9a-f]{8}$/.test(raw.levelKey || '') ? raw.levelKey : null,
     frames,
   };
 }
@@ -2572,7 +2575,9 @@ app.get('/api/portal2d/me', authenticateToken, (req, res) => {
 app.get('/api/portal2d/demos', authenticateToken, async (req, res) => {
   try {
     const r = await db.query(
-      `SELECT id, demo_name AS name, 4 AS "demoType", created_at AS "createdAt"
+      `SELECT id, demo_name AS name, 4 AS "demoType", created_at AS "createdAt",
+              demo_data::jsonb ->> 'levelKey' AS "levelKey",
+              (demo_data::jsonb -> 'level') ->> 'name' AS "levelName"
        FROM portal2d_demos WHERE username = $1 ORDER BY id DESC LIMIT 100;`,
       [req.user.username],
     );
