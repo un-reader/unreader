@@ -434,7 +434,7 @@ function requestChangelogPage(page, perPage) {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 15000);
     try {
-      const url = new URL('https://api.github.com/repos/tock-dev/unreader/commits');
+      const url = new URL('https://api.github.com/repos/un-reader/unreader/commits');
       url.searchParams.set('per_page', String(perPage));
       url.searchParams.set('page', String(page));
       const response = await fetch(url, {
@@ -2433,24 +2433,49 @@ function p2dNormalizeDemo(input, fallbackName) {
       throw new Error('Demo data is invalid JSON.');
     }
   }
-  if (
-    !raw ||
-    raw.format !== 'unreader.portal.demo' ||
-    raw.version !== 1 ||
-    raw.type !== 'gameplay' ||
-    !Array.isArray(raw.frames) ||
-    raw.frames.length < 2 ||
-    raw.frames.length > P2D_MAX_DEMO_FRAMES
-  ) {
+  if (!raw || raw.format !== 'unreader.portal.demo' || raw.type !== 'gameplay') {
     throw new Error('This is not a supported UnReader Portal demo.');
   }
   const duration = p2dInt(raw.duration, 1, 120000);
-  if (duration < 100) throw new Error('Demo recording is too short.');
+  if (duration < (raw.version === 3 ? 1 : 100)) throw new Error('Demo recording is too short.');
   const levelPack = p2dNormalizePack(
     { name: fallbackName, levels: [raw.level] },
     fallbackName,
     1,
   );
+  if (raw.version === 2 || raw.version === 3) {
+    const tickBased = raw.version === 3;
+    if (!Array.isArray(raw.events) || raw.events.length < 1 || raw.events.length > 5000)
+      throw new Error('Demo input timeline is invalid.');
+    const allowedKeys = new Set(['a', 'd', 'w', 'arrowleft', 'arrowright', 'arrowup', ' ', 'f']);
+    let previousAt = -1;
+    const events = raw.events.map((event) => {
+      if (!event || typeof event !== 'object') throw new Error('Demo contains an invalid input.');
+      const at = p2dInt(tickBased ? event.tick : event.at, 0, duration);
+      if (at < previousAt) throw new Error('Demo inputs are out of order.');
+      previousAt = at;
+      const timing = tickBased ? { tick: at } : { at };
+      if (event.type === 'key' && allowedKeys.has(String(event.key).toLowerCase()))
+        return { ...timing, type: 'key', key: String(event.key).toLowerCase(), down: !!event.down };
+      if (event.type === 'aim')
+        return {
+          ...timing, type: 'aim',
+          x: p2dNum(event.x, -1, 1), y: p2dNum(event.y, -1, 1),
+          active: !!event.active, magnitude: p2dNum(event.magnitude, 0, 1),
+        };
+      if (event.type === 'fire' && (event.color === 'blue' || event.color === 'yellow'))
+        return { ...timing, type: 'fire', color: event.color };
+      if (event.type === 'restart') return { ...timing, type: 'restart' };
+      if (event.type === 'clear' || event.type === 'grab') return { ...timing, type: event.type };
+      throw new Error('Demo contains an unsupported input.');
+    });
+    return {
+      format: 'unreader.portal.demo', version: raw.version, type: 'gameplay',
+      demoType: 4, duration, level: levelPack.levels[0], events,
+    };
+  }
+  if (raw.version !== 1 || !Array.isArray(raw.frames) || raw.frames.length < 2 || raw.frames.length > P2D_MAX_DEMO_FRAMES)
+    throw new Error('This is not a supported UnReader Portal demo.');
   const number = (value, min, max, label) => {
     if (!Number.isFinite(Number(value)))
       throw new Error(`Demo ${label} is invalid.`);

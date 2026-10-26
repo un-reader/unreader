@@ -421,6 +421,7 @@
             var modalCancelCallback = null;
             var demoRecording = null;
             var demoPlayback = null;
+            var gameTick = 0;
 
             var packs = [];
             var activePackId = 'builtin';
@@ -1580,22 +1581,32 @@
 
             // ---------- Keyboard ----------
             window.addEventListener('keydown', function(e) {
+                if (demoPlayback) { if (e.key === 'Escape') finishPortalDemoPlayback(); return; }
                 var target = e.target;
                 var isTextInput = target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT' || target.isContentEditable);
-                if (!isTextInput) keys[e.key.toLowerCase()] = true;
+                var key = e.key.toLowerCase();
+                if (!isTextInput) {
+                    if (!keys[key] && ['a','d','w','arrowleft','arrowright','arrowup',' '].indexOf(key) !== -1) recordDemoEvent({ type: 'key', key: key, down: true });
+                    keys[key] = true;
+                }
                 if (!isTextInput && ['arrowup','arrowdown','arrowleft','arrowright',' '].indexOf(e.key.toLowerCase()) !== -1) e.preventDefault();
                 if (!isTextInput && mode === 'edit' && (e.key === 'Delete' || e.key === 'Backspace')) { e.preventDefault(); deleteSelection(); }
                 if (mode === 'play') {
                     if (e.key.toLowerCase() === 'q') firePortal('blue');
                     if (e.key.toLowerCase() === 'e') firePortal('yellow');
-                    if (e.key.toLowerCase() === 'r') { clearPlayerPortals(); updatePortalCount(); toast('PORTALS CLEARED'); }
+                    if (e.key.toLowerCase() === 'r') { recordDemoEvent({ type: 'clear' }); clearPlayerPortals(); updatePortalCount(); toast('PORTALS CLEARED'); }
                     if (e.key.toLowerCase() === 'f') toggleGrab();
-                    if (e.key.toLowerCase() === 'p') loadLevel(levelIndex);
+                    if (e.key.toLowerCase() === 'p') { recordDemoEvent({ type: 'restart' }); loadLevel(levelIndex); }
                     if (e.key.toLowerCase() === 'n') nextLevel();
                     if (e.key.toLowerCase() === 'b') prevLevel();
                 }
             });
-            window.addEventListener('keyup', function(e) { keys[e.key.toLowerCase()] = false; });
+            window.addEventListener('keyup', function(e) {
+                if (demoPlayback) return;
+                var key = e.key.toLowerCase();
+                if (keys[key] && ['a','d','w','arrowleft','arrowright','arrowup',' '].indexOf(key) !== -1) recordDemoEvent({ type: 'key', key: key, down: false });
+                keys[key] = false;
+            });
 
             // ---------- Canvas coords ----------
             function getCanvasCoords(clientX, clientY) {
@@ -1762,6 +1773,7 @@
             }
 
             function canvasPointerDown(clientX, clientY) {
+                if (demoPlayback) return;
                 if (mode === 'edit') {
                     var coords = getCanvasCoords(clientX, clientY);
                     if (editorTool === 'wire') { editorWireClick(coords); return; }
@@ -1787,7 +1799,7 @@
                         var nx = dx / len, ny = dy / len;
                         setLatchedAim(nx, ny);
                         updateAimSnap();
-                        if (aimSnap) firePortalAtSnap('blue');
+                        if (aimSnap) firePortal('blue');
                         else toast(aimBlocked ? 'CANNOT PORTAL THERE' : 'NO SURFACE');
                     }
                 }
@@ -1813,7 +1825,7 @@
 
             var mouseAimActive = false;
             canvas.addEventListener('mousemove', function(e) {
-                if (mode !== 'play') return;
+                if (mode !== 'play' || demoPlayback) return;
                 var c = getCanvasCoords(e.clientX, e.clientY);
                 var dx = c.x - (player.x + player.w / 2), dy = c.y - (player.y + player.h / 2);
                 var len = Math.sqrt(dx * dx + dy * dy);
@@ -1822,7 +1834,7 @@
             canvas.addEventListener('mouseleave', function() { mouseAimActive = false; });
             canvas.addEventListener('contextmenu', function(e) { e.preventDefault(); });
             canvas.addEventListener('mousedown', function(e) {
-                if (mode !== 'play') return;
+                if (mode !== 'play' || demoPlayback) return;
                 if (e.button === 0) { firePortal('blue'); e.preventDefault(); }
                 else if (e.button === 2) { firePortal('yellow'); e.preventDefault(); }
             });
@@ -2020,17 +2032,21 @@
                 aimX = nx; aimY = ny;
                 joystickMoveStick(nx * STICK_RADIUS, ny * STICK_RADIUS);
                 joystickEl.classList.add('latched');
+                recordDemoAim(true);
             }
             function resetAim() {
+                if (demoPlayback) return;
                 aimX = 0; aimY = -1; aimActive = false; aimMagnitude = 0;
                 joystickMoveStick(0, -STICK_RADIUS);
                 joystickEl.classList.add('latched');
                 stickEl.classList.remove('active');
                 updateAimSnap(); updateAimIndicator(); toast('AIM RESET (UP)');
+                recordDemoAim(true);
             }
             window.resetAim = resetAim;
 
             function joystickHandle(clientX, clientY) {
+                if (demoPlayback) return;
                 var rect = joystickEl.getBoundingClientRect();
                 var cx = rect.left + rect.width / 2;
                 var cy = rect.top + rect.height / 2;
@@ -2050,10 +2066,12 @@
                 updateAimSnap(); updateAimIndicator();
             }
             function joystickRelease() {
+                if (demoPlayback) return;
                 joystickActive = false; joystickPointerId = null;
                 aimActive = false; aimMagnitude = 0;
                 stickEl.classList.remove('active');
                 updateAimSnap(); updateAimIndicator();
+                recordDemoAim(true);
             }
 
             joystickEl.addEventListener('touchstart', function(e) {
@@ -2124,11 +2142,11 @@
             // ---------- Touch buttons ----------
             var lastTouchTime = 0;
             function markTouch() { lastTouchTime = Date.now(); }
-            window.touchDown = function(key, event) { if (event) { event.preventDefault(); if (event.stopPropagation) event.stopPropagation(); } markTouch(); keys[key] = true; };
-            window.touchUp = function(key, event) { if (event) { event.preventDefault(); if (event.stopPropagation) event.stopPropagation(); } keys[key] = false; };
-            window.touchFire = function(color, event) { if (event) { event.preventDefault(); if (event.stopPropagation) event.stopPropagation(); } markTouch(); firePortal(color); };
+            window.touchDown = function(key, event) { if (event) { event.preventDefault(); if (event.stopPropagation) event.stopPropagation(); } if (demoPlayback) return; markTouch(); if (!keys[key]) recordDemoEvent({ type: 'key', key: key, down: true }); keys[key] = true; };
+            window.touchUp = function(key, event) { if (event) { event.preventDefault(); if (event.stopPropagation) event.stopPropagation(); } if (demoPlayback) return; if (keys[key]) recordDemoEvent({ type: 'key', key: key, down: false }); keys[key] = false; };
+            window.touchFire = function(color, event) { if (event) { event.preventDefault(); if (event.stopPropagation) event.stopPropagation(); } if (demoPlayback) return; markTouch(); firePortal(color); };
             window.touchFireEnd = function(event) { if (event) { event.preventDefault(); if (event.stopPropagation) event.stopPropagation(); } };
-            window.touchGrab = function(event) { if (event) { event.preventDefault(); if (event.stopPropagation) event.stopPropagation(); } markTouch(); toggleGrab(); };
+            window.touchGrab = function(event) { if (event) { event.preventDefault(); if (event.stopPropagation) event.stopPropagation(); } if (demoPlayback) return; markTouch(); toggleGrab(); };
             window.touchGrabEnd = function(event) { if (event) { event.preventDefault(); if (event.stopPropagation) event.stopPropagation(); } };
 
             // ---------- Editor tools ----------
@@ -2665,6 +2683,8 @@
 
             // ---------- Portal firing ----------
             function firePortal(color) {
+                recordDemoAim(true);
+                recordDemoEvent({ type: 'fire', color: color === 'yellow' ? 'yellow' : 'blue' });
                 if (!canFirePortal(color)) return;
                 computeSnap();
                 if (!aimSnap) { toast(aimBlocked ? 'CANNOT PORTAL THERE' : 'NO SURFACE'); updateAimIndicator(); return; }
@@ -2930,7 +2950,9 @@
                 if (exitOpen && player.x < exit.x + exit.w && player.x + player.w > exit.x &&
                     player.y < exit.y + exit.h && player.y + player.h > exit.y) {
                     levelClear = true;
-                    if (testMode) {
+                    if (demoPlayback) {
+                        // Keep the recorded run self-contained; demo playback must not open game UI or advance levels.
+                    } else if (testMode) {
                         lvl._ok = true;
                         persistIfEditable();
                         toast('TEST PASSED');
@@ -2972,6 +2994,7 @@
             }
 
             function toggleGrab() {
+                recordDemoEvent({ type: 'grab' });
                 if (heldCube >= 0 && cubes[heldCube]) {
                     var held = cubes[heldCube];
                     heldCube = -1;
@@ -3508,28 +3531,41 @@
                     upgrades: (lvl.portalGunUpgrades || []).map(function (item) { return !!item.collected; })
                 };
             }
-            function captureDemoFrame(force) {
+            function recordDemoEvent(event) {
+                if (!demoRecording || demoPlayback || demoRecording.data.events.length >= 5000) return;
+                event.tick = Math.max(0, gameTick - demoRecording.startedTick);
+                demoRecording.data.events.push(event);
+                demoRecording.data.duration = event.tick;
+            }
+            function recordDemoAim(force) {
                 if (!demoRecording) return;
                 var now = Date.now();
-                var at = Math.min(120000, now - demoRecording.startedAt);
-                if (!force && at - demoRecording.lastAt < 100) return;
-                demoRecording.lastAt = at;
-                demoRecording.data.frames.push(snapshotDemoFrame(at));
-                demoRecording.data.duration = at;
-                if (at >= 120000 || demoRecording.data.frames.length >= 1201) stopPortalDemoRecording();
+                if (!force && demoRecording.lastAimAt && now - demoRecording.lastAimAt < 50) return;
+                var state = [aimX, aimY, !!aimActive, aimMagnitude];
+                if (!force && demoRecording.lastAim && state.every(function(value, i) { return Math.abs(value - demoRecording.lastAim[i]) < 0.015; })) return;
+                demoRecording.lastAim = state;
+                demoRecording.lastAimAt = now;
+                recordDemoEvent({ type: 'aim', x: aimX, y: aimY, active: !!aimActive, magnitude: aimMagnitude });
+            }
+            function captureDemoInput() {
+                if (!demoRecording) return;
+                recordDemoAim(false);
+                demoRecording.data.duration = Math.max(0, gameTick - demoRecording.startedTick);
+                if (Date.now() - demoRecording.startedAt >= 120000 || demoRecording.data.events.length >= 5000) stopPortalDemoRecording();
             }
             window.startPortalDemoRecording = function() {
                 if (mode !== 'play' || demoPlayback) { toast('DEMOS RECORD IN PLAY MODE'); return; }
                 if (!getToken()) { showModal('Log in from the home page to save a demo to your account.', false); return; }
+                keys = {};
                 demoRecording = {
                     startedAt: Date.now(),
-                    lastAt: -100,
+                    startedTick: gameTick,
                     data: {
-                        format: 'unreader.portal.demo', version: 1, type: 'gameplay', demoType: 4, duration: 0,
-                        level: cleanLevel(levels[levelIndex]), frames: []
+                        format: 'unreader.portal.demo', version: 3, type: 'gameplay', demoType: 4, duration: 0,
+                        level: cleanLevel(levels[levelIndex]), events: []
                     }
                 };
-                captureDemoFrame(true);
+                recordDemoAim(true);
                 document.getElementById('demo-record-start').disabled = true;
                 document.getElementById('demo-record-stop').disabled = false;
                 setDemoStatus('RECORDING • MAX 2 MINUTES • SAVES TO YOUR ACCOUNT');
@@ -3538,15 +3574,12 @@
                 if (!demoRecording) return;
                 var recording = demoRecording;
                 demoRecording = null;
-                var finalAt = Math.min(120000, Date.now() - recording.startedAt);
-                if (finalAt > recording.lastAt) {
-                    recording.data.frames.push(snapshotDemoFrame(finalAt));
-                    recording.data.duration = finalAt;
-                }
+                var finalTick = Math.max(0, gameTick - recording.startedTick);
+                recording.data.duration = finalTick;
                 var data = recording.data;
                 document.getElementById('demo-record-start').disabled = false;
                 document.getElementById('demo-record-stop').disabled = true;
-                if (data.frames.length < 2) { setDemoStatus('RECORDING TOO SHORT'); return; }
+                if (Date.now() - recording.startedAt < 100 || data.duration < 1 || !data.events.length) { setDemoStatus('RECORDING TOO SHORT'); return; }
                 showPrompt('Save this demo to your UnReader account as:', levels[levelIndex].name + ' demo', function(name) {
                     name = (name || '').replace(/^\s+|\s+$/g, '');
                     if (!name) { setDemoStatus('DEMO NOT SAVED'); return; }
@@ -3589,32 +3622,52 @@
                 var consoleOnly = demoPlayback.consoleOnly;
                 demoPlayback = null;
                 levels = backup.levels;
+                keys = backup.keys;
                 switchMode(backup.mode);
                 loadLevel(backup.levelIndex);
+                aimX = backup.aim.x; aimY = backup.aim.y;
+                aimActive = backup.aim.active; aimMagnitude = backup.aim.magnitude;
+                updateAimSnap(); updateAimIndicator();
                 if (!consoleOnly) setDemoStatus(demoType === 2 ? 'TYPE 2 • PLAYER DIED • DEMO ENDED' : 'DEMO PLAYBACK COMPLETE');
             }
             window.stopPortalDemoPlayback = finishPortalDemoPlayback;
+            function applyDemoEvent(event) {
+                if (event.type === 'key') keys[event.key] = event.down;
+                else if (event.type === 'aim') {
+                    aimX = event.x; aimY = event.y; aimActive = event.active; aimMagnitude = event.magnitude;
+                    updateAimSnap();
+                } else if (event.type === 'fire') firePortal(event.color);
+                else if (event.type === 'clear') { clearPlayerPortals(); updatePortalCount(); }
+                else if (event.type === 'grab') toggleGrab();
+                else if (event.type === 'restart') loadLevel(0);
+            }
             function playPortalDemoData(data, consoleOnly) {
                 if (demoRecording) {
                     if (consoleOnly) return;
                     showModal('Stop and save your current recording before playing another demo.', false);
                     return;
                 }
-                if (!data || data.format !== 'unreader.portal.demo' || data.version !== 1 ||
-                    data.type !== 'gameplay' || !Array.isArray(data.frames) || data.frames.length < 2 ||
+                var snapshotDemo = data && data.version === 1 && Array.isArray(data.frames) && data.frames.length >= 2;
+                var inputDemo = data && (data.version === 2 || data.version === 3) && Array.isArray(data.events) && data.events.length > 0;
+                if (!data || data.format !== 'unreader.portal.demo' || (!snapshotDemo && !inputDemo) ||
+                    data.type !== 'gameplay' ||
                     (data.demoType !== 1 && data.demoType !== 2 && data.demoType !== 3 && data.demoType !== 4)) {
                     if (consoleOnly) console.error('This saved demo is invalid or uses an unsupported format.');
                     else showModal('This saved demo is invalid or uses an unsupported format.', false);
                     return;
                 }
-                var backup = { levels: levels, levelIndex: levelIndex, mode: mode };
+                var backup = { levels: levels, levelIndex: levelIndex, mode: mode, keys: keys,
+                    aim: { x: aimX, y: aimY, active: aimActive, magnitude: aimMagnitude } };
                 switchMode('play');
                 levels = [cleanLevel(data.level)];
                 loadLevel(0);
+                keys = {};
                 demoPlayback = {
-                    data: data, startedAt: Date.now(), backup: backup, frameIndex: 0,
+                    data: data, startedAt: Date.now(), backup: backup, frameIndex: 0, eventIndex: 0, tick: 0,
                     consoleOnly: !!consoleOnly
                 };
+                if (inputDemo && data.version === 2) for (var zero = 0; zero < data.events.length && data.events[zero].at === 0; zero++) applyDemoEvent(data.events[zero]);
+                if (inputDemo && data.version === 2) demoPlayback.eventIndex = zero;
                 if (!consoleOnly) setDemoStatus('TYPE ' + data.demoType + ' • PLAYING DEMO');
             }
             window.playPortalDemo = function(id) {
@@ -3651,9 +3704,9 @@
             function createInterlopeDemo(type) {
                 var lvl = levels[levelIndex];
                 var data = {
-                    format: 'unreader.portal.demo', version: 1, type: 'gameplay', demoType: type,
-                    duration: type === 1 ? 4200 : (type === 2 ? 6500 : 12000),
-                    level: cleanLevel(lvl), frames: []
+                    format: 'unreader.portal.demo', version: type === 2 ? 1 : 3, type: 'gameplay', demoType: type,
+                    duration: type === 1 ? 252 : (type === 2 ? 6500 : 720),
+                    level: cleanLevel(lvl), frames: [], events: []
                 };
                 function frame(at) {
                     var result = snapshotDemoFrame(at);
@@ -3662,17 +3715,10 @@
                 }
                 if (type === 1) {
                     for (var aimFrame = 0; aimFrame <= 21; aimFrame++) {
-                        var row = frame(aimFrame * 200);
                         var angle = Math.random() * Math.PI * 2;
-                        row.aim.x = Math.cos(angle);
-                        row.aim.y = Math.sin(angle);
-                        row.aim.active = true;
-                        row.aim.magnitude = 1;
-                        data.frames.push(row);
+                        data.events.push({ tick: aimFrame * 12, type: 'aim', x: Math.cos(angle), y: Math.sin(angle), active: true, magnitude: 1 });
                     }
-                    data.frames[data.frames.length - 1].aim.x = 0;
-                    data.frames[data.frames.length - 1].aim.y = -1;
-                    data.frames[data.frames.length - 1].aim.active = false;
+                    data.events.push({ tick: data.duration, type: 'aim', x: 0, y: -1, active: false, magnitude: 0 });
                 } else if (type === 2) {
                     var start = frame(0);
                     start.player.x = Math.max(0, Math.min(W - PLAYER_SIZE, lvl.start.x));
@@ -3688,66 +3734,26 @@
                     end.player = JSON.parse(JSON.stringify(dead.player)); end.ended = true;
                     data.frames = [start, wait, dead, end];
                 } else {
-                    var sim = { x: lvl.start.x, y: lvl.start.y, vx: 0, vy: 0, onGround: false };
-                    var platformsForWalk = lvl.platforms || [];
-                    var direction = 0;
-                    var blue = null, orange = null;
-                    for (var i = 0; i <= 120; i++) {
-                        var at = i * 100;
-                        for (var step = 0; step < 6; step++) {
-                            if (Math.random() < 0.12) direction = Math.floor(Math.random() * 3) - 1;
-                            if (direction < 0) sim.vx = -MOVE_SPEED;
-                            else if (direction > 0) sim.vx = MOVE_SPEED;
-                            else { sim.vx *= 0.8; if (Math.abs(sim.vx) < 0.1) sim.vx = 0; }
-                            if (sim.onGround && Math.random() < 0.025) {
-                                sim.vy = JUMP_FORCE;
-                                sim.onGround = false;
-                            }
-                            sim.vy = Math.min(MAX_FALL_SPEED, sim.vy + GRAVITY);
-                            sim.x += sim.vx;
-                            for (var pi = 0; pi < platformsForWalk.length; pi++) {
-                                var side = platformsForWalk[pi];
-                                if (sim.x < side.x + side.w && sim.x + PLAYER_SIZE > side.x && sim.y < side.y + side.h && sim.y + PLAYER_SIZE > side.y) {
-                                    sim.x = sim.vx > 0 ? side.x - PLAYER_SIZE : side.x + side.w;
-                                    sim.vx = 0;
-                                }
-                            }
-                            var oldY = sim.y;
-                            sim.y += sim.vy;
-                            sim.onGround = false;
-                            for (var pj = 0; pj < platformsForWalk.length; pj++) {
-                                var floor = platformsForWalk[pj];
-                                if (sim.x < floor.x + floor.w && sim.x + PLAYER_SIZE > floor.x && sim.y < floor.y + floor.h && sim.y + PLAYER_SIZE > floor.y) {
-                                    if (sim.vy >= 0 && oldY + PLAYER_SIZE <= floor.y + 2) {
-                                        sim.y = floor.y - PLAYER_SIZE;
-                                        sim.vy = 0;
-                                        sim.onGround = true;
-                                    } else if (sim.vy < 0) {
-                                        sim.y = floor.y + floor.h;
-                                        sim.vy = 0;
-                                    }
-                                }
-                            }
-                            sim.x = Math.max(0, Math.min(W - PLAYER_SIZE, sim.x));
-                            if (sim.y > H + 40) {
-                                sim.x = lvl.start.x;
-                                sim.y = lvl.start.y;
-                                sim.vx = 0; sim.vy = 0;
-                            }
+                    var at = 0, held = null, movement = ['a', 'd'];
+                    while (at < data.duration) {
+                        var next = movement[Math.floor(Math.random() * movement.length)];
+                        if (Math.random() < 0.3) next = null;
+                        if (held !== next) {
+                            if (held) data.events.push({ tick: at, type: 'key', key: held, down: false });
+                            if (next) data.events.push({ tick: at, type: 'key', key: next, down: true });
+                            held = next;
                         }
-                        if (platformsForWalk.length && Math.random() < 0.04) {
-                            var surface = platformsForWalk[Math.floor(Math.random() * platformsForWalk.length)];
-                            var portal = { x: surface.x + Math.random() * surface.w, y: surface.y, angle: 0, normal: { x: 0, y: -1 } };
-                            if (Math.random() < 0.5) blue = portal; else orange = portal;
+                        if (Math.random() < 0.22) {
+                            data.events.push({ tick: at, type: 'key', key: 'w', down: true });
+                            data.events.push({ tick: Math.min(data.duration, at + 7), type: 'key', key: 'w', down: false });
                         }
-                        var row = frame(at);
-                        row.player.x = sim.x; row.player.y = sim.y;
-                        row.player.vx = sim.vx; row.player.vy = sim.vy;
-                        row.player.onGround = sim.onGround;
-                        row.portalA = blue ? JSON.parse(JSON.stringify(blue)) : null;
-                        row.portalB = orange ? JSON.parse(JSON.stringify(orange)) : null;
-                        data.frames.push(row);
+                        var randomAngle = Math.random() * Math.PI * 2;
+                        data.events.push({ tick: at, type: 'aim', x: Math.cos(randomAngle), y: Math.sin(randomAngle), active: true, magnitude: 1 });
+                        if (Math.random() < 0.3) data.events.push({ tick: at, type: 'fire', color: Math.random() < 0.5 ? 'blue' : 'yellow' });
+                        at += 11 + Math.floor(Math.random() * 26);
                     }
+                    if (held) data.events.push({ tick: data.duration, type: 'key', key: held, down: false });
+                    data.events.push({ tick: data.duration, type: 'key', key: 'w', down: false });
                 }
                 return data;
             }
@@ -3808,13 +3814,32 @@
                 refreshSnapIfPlay();
                 if (demoPlayback) {
                     var elapsed = Date.now() - demoPlayback.startedAt;
-                    var frames = demoPlayback.data.frames;
-                    while (demoPlayback.frameIndex + 1 < frames.length && frames[demoPlayback.frameIndex + 1].at <= elapsed) demoPlayback.frameIndex++;
-                    applyDemoFrame(interpolateDemoFrame(frames, demoPlayback.frameIndex, elapsed));
-                    if (elapsed >= demoPlayback.data.duration) finishPortalDemoPlayback();
+                    if (demoPlayback.data.version === 3) {
+                        var tickEvents = demoPlayback.data.events;
+                        while (demoPlayback.eventIndex < tickEvents.length && tickEvents[demoPlayback.eventIndex].tick <= demoPlayback.tick) applyDemoEvent(tickEvents[demoPlayback.eventIndex++]);
+                        if (demoPlayback.tick < demoPlayback.data.duration && !levelClear) update();
+                        demoPlayback.tick++;
+                        if (demoPlayback.tick >= demoPlayback.data.duration) {
+                            while (demoPlayback.eventIndex < tickEvents.length && tickEvents[demoPlayback.eventIndex].tick <= demoPlayback.tick) applyDemoEvent(tickEvents[demoPlayback.eventIndex++]);
+                            finishPortalDemoPlayback();
+                        }
+                    } else if (demoPlayback.data.version === 2) {
+                        var events = demoPlayback.data.events;
+                        while (demoPlayback.eventIndex < events.length && events[demoPlayback.eventIndex].at <= elapsed) applyDemoEvent(events[demoPlayback.eventIndex++]);
+                        if (demoPlayback.data.demoType === 2) {
+                            var deathAt = Math.min(5200, demoPlayback.data.duration);
+                            if (elapsed >= deathAt) { player.y = H + 120; player.vx = 0; player.vy = 0; }
+                        } else if (!levelClear) update();
+                    } else {
+                        var frames = demoPlayback.data.frames;
+                        while (demoPlayback.frameIndex + 1 < frames.length && frames[demoPlayback.frameIndex + 1].at <= elapsed) demoPlayback.frameIndex++;
+                        applyDemoFrame(interpolateDemoFrame(frames, demoPlayback.frameIndex, elapsed));
+                    }
+                    if (demoPlayback && demoPlayback.data.version !== 3 && elapsed >= demoPlayback.data.duration) finishPortalDemoPlayback();
                 } else {
                     update();
-                    captureDemoFrame(false);
+                    gameTick++;
+                    captureDemoInput();
                 }
                 render();
                 requestAnimationFrame(gameLoop);

@@ -171,7 +171,7 @@
         window.setTimeout(function () {
           var request = new XMLHttpRequest();
           request.open('GET', 'https://lrclib.net/api/search?q=' + encodeURIComponent(query), true);
-          request.setRequestHeader('X-User-Agent', 'UnReader Lyrics/1.0 (https://github.com/tock-dev/unreader)');
+          request.setRequestHeader('X-User-Agent', 'UnReader Lyrics/1.0 (https://github.com/un-reader/unreader)');
           request.timeout = 15000;
           lastRequestAt = Date.now();
           request.onreadystatechange = function () {
