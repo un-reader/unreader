@@ -6,7 +6,7 @@
   <meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
   <title>un-reader BBS - Moderation Console</title>
-  <link rel="stylesheet" media="screen" href="https://fontlibrary.org/face/symbola/css/symbola.css" type="text/css" />
+  <link rel="stylesheet" media="screen" href="https://fontlibrary.org/face/symbola" type="text/css" />
   <script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.1.2/purify.min.js"></script>
   <link rel="shortcut icon" href="favicon.ico" type="image/x-icon">
   <link rel="stylesheet" href="styles.css" />
@@ -356,7 +356,7 @@
 
               if (!(isAdminUser(userRoles) || isModeratorUser(userRoles))) {
                 await unAlert(
-                  'Access Denied: You do not possess structural operator credentials.',
+                  'Access Denied: HALT! You, citizen, come with me.',
                 );
                 window.location.href = 'index.html';
                 return;
@@ -445,6 +445,8 @@
               var safeIP = DOMPurify.sanitize(u.last_ip || 'Unknown');
               var safeStatus = DOMPurify.sanitize(status);
               var safeAlts = u.alts ? DOMPurify.sanitize(u.alts.join(', ')) : '';
+              var targetIsModerator = !!u.is_moderator || (Array.isArray(u.roles) && u.roles.indexOf('moderator') !== -1);
+              var targetIsAdmin = !!u.is_admin || (Array.isArray(u.roles) && u.roles.indexOf('admin') !== -1) || ['admin', 'lmao'].indexOf(u.username.toLowerCase()) !== -1;
 
               var html = `<div style="line-height: 1.5;">
               <strong>Username:</strong> ${safeUsername}<br>
@@ -467,6 +469,7 @@
                 <button class="retro-btn danger-btn" onclick="adminAction('mod_ban', '${safeUsername}')">BAN USER</button>
                 <button class="retro-btn" onclick="adminAction('mod_pardon', '${safeUsername}')">PARDON USER</button>
                 <button class="retro-btn danger-btn" onclick="banIP('${safeUsername}')">BAN IP</button>
+                ${targetIsAdmin ? '' : `<button class="retro-btn" onclick="setModeratorRole('${safeUsername}', ${!targetIsModerator})">${targetIsModerator ? 'REMOVE MODERATOR' : 'PROMOTE TO MODERATOR'}</button>`}
               </div>`;
               }
               html += `</div>`;
@@ -525,6 +528,29 @@
           searchUserAction();
           openModLogs();
         }, 500);
+      }
+
+      async function setModeratorRole(target, enabled) {
+        if (!isAdminUser(userRoles)) return await unAlert('Only admins can promote or remove moderators.');
+        var action = enabled ? 'Promote ' + target + ' to moderator?' : 'Remove moderator access from ' + target + '?';
+        if (!(await unConfirm(action))) return;
+        var xhr = new XMLHttpRequest();
+        xhr.open('POST', BACKEND_URL + '/api/admin/assign-role', true);
+        xhr.setRequestHeader('Content-Type', 'application/json');
+        xhr.setRequestHeader('Authorization', 'Bearer ' + token);
+        xhr.onreadystatechange = async function () {
+          if (xhr.readyState !== 4) return;
+          var result = {};
+          try { result = JSON.parse(xhr.responseText); } catch (e) {}
+          if (xhr.status >= 200 && xhr.status < 300) {
+            await unAlert(enabled ? target + ' promoted to moderator.' : target + ' is no longer a moderator.');
+            searchUserAction();
+            openModLogs();
+          } else {
+            await unAlert('Moderator role update failed: ' + (result.error || 'Request failed (' + xhr.status + ').'));
+          }
+        };
+        xhr.send(JSON.stringify({ target: target, role: 'moderator', enabled: !!enabled }));
       }
 
       async function banIP(targetUser) {

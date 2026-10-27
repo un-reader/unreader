@@ -1594,7 +1594,7 @@ app.get(
       `Admin User-Search: target=${targetUsername} by=${req.user.username} who is (${req.user.role.role})`,
     );
     const r = await db.query(
-      'SELECT username, last_ip, timeout_until, is_banned, roles FROM users WHERE username = $1;',
+      'SELECT username, last_ip, timeout_until, is_banned, roles, is_moderator, is_admin FROM users WHERE username = $1;',
       [targetUsername],
     );
     if (!r.rows[0]) return res.status(404).json({ error: 'User not found' });
@@ -1819,11 +1819,18 @@ app.post('/api/admin/assign-role', authenticateToken, async (req, res) => {
   }
   try {
     const userResult = await db.query(
-      'SELECT username, roles FROM users WHERE LOWER(username) = LOWER($1);',
+      `SELECT username, roles, is_admin, roles::jsonb @> '["admin"]' AS has_admin_role
+       FROM users WHERE LOWER(username) = LOWER($1);`,
       [target],
     );
     if (!userResult.rows[0])
       return res.status(404).json({ error: 'User not found.' });
+    if (
+      role === 'moderator' &&
+      (userResult.rows[0].is_admin || userResult.rows[0].has_admin_role ||
+        ADMIN_ENTITY_USERNAMES.has(userResult.rows[0].username.toLowerCase()))
+    )
+      return res.status(400).json({ error: 'Administrator accounts cannot be changed here.' });
     if (role !== 'moderator') {
       const roleResult = await db.query(
         'SELECT role FROM roles WHERE role = $1;',
@@ -1844,10 +1851,15 @@ app.post('/api/admin/assign-role', authenticateToken, async (req, res) => {
     if (enabled && !hasRole) assignedRoles.push(role);
     if (!enabled && hasRole)
       assignedRoles = assignedRoles.filter((item) => item !== role);
-    await db.query('UPDATE users SET roles = $1 WHERE username = $2;', [
-      JSON.stringify(assignedRoles),
-      userResult.rows[0].username,
-    ]);
+    if (role === 'moderator') {
+      await db.query('UPDATE users SET roles = $1, is_moderator = $2 WHERE username = $3;', [
+        JSON.stringify(assignedRoles), enabled, userResult.rows[0].username,
+      ]);
+    } else {
+      await db.query('UPDATE users SET roles = $1 WHERE username = $2;', [
+        JSON.stringify(assignedRoles), userResult.rows[0].username,
+      ]);
+    }
     invalidateUserRoleCache(userResult.rows[0].username);
     await db.query(
       'INSERT INTO mod_logs (mod_username, action_type, target_username, reason, timestamp) VALUES ($1, $2, $3, $4, $5);',
