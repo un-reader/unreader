@@ -677,9 +677,7 @@ function showProfilePicture(imageData, fallback) {
   const element = document.getElementById('info-avatar');
   while (element.firstChild) element.removeChild(element.firstChild);
   if (!profilePictureDataUrl(imageData)) {
-    element.textContent = navigator.userAgent.toLowerCase().includes('kindle') ?
-      ':)' :
-      fallback || '';
+    element.textContent = fallback || '';
     return;
   }
   const image = document.createElement('img');

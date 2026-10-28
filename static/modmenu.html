@@ -6,7 +6,6 @@
   <meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
   <title>un-reader BBS - Moderation Console</title>
-  <link rel="stylesheet" media="screen" href="https://fontlibrary.org/face/symbola" type="text/css" />
   <script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.1.2/purify.min.js"></script>
   <link rel="shortcut icon" href="favicon.ico" type="image/x-icon">
   <link rel="stylesheet" href="styles.css" />
@@ -292,6 +291,12 @@
           </div>
 
           <div class="logs-pane">
+            <div id="admin-removal-panel" style="display:none; border-bottom:2px solid var(--border-color); padding-bottom:10px; margin-bottom:10px;">
+              <div class="pane-title">ADMIN REMOVAL VOTES</div>
+              <div style="font-size:11px; margin:4px 0;">Passes with at least 50% YES from eligible admins OR 80% YES from eligible moderators. The target cannot vote.</div>
+              <button class="retro-btn" onclick="loadAdminRemovalProposals()">REFRESH VOTES</button>
+              <div id="admin-removal-list" style="margin-top:8px;">No open removal votes.</div>
+            </div>
             <div class="pane-title">🛡️ System Audit Logs</div>
             
             <div class="action-header-row">
@@ -366,6 +371,10 @@
                 userRoles.role.role.toUpperCase();
               document.getElementById('mod-role-text').style.color =
                 isAdminUser(userRoles) ? '#ff0000' : '#0000ff';
+              if (isAdminUser(userRoles) || isModeratorUser(userRoles)) {
+                document.getElementById('admin-removal-panel').style.display = 'block';
+                loadAdminRemovalProposals();
+              }
             }
             return;
           }
@@ -410,6 +419,115 @@
         xhr.send();
       }
 
+      function loadAdminRemovalProposals() {
+        if (!isAdminUser(userRoles)) return;
+        var xhr = new XMLHttpRequest();
+        xhr.open('GET', BACKEND_URL + '/api/admin/removal-proposals', true);
+        xhr.setRequestHeader('Authorization', 'Bearer ' + token);
+        xhr.onreadystatechange = function () {
+          if (xhr.readyState !== 4) return;
+          var list = document.getElementById('admin-removal-list');
+          list.innerHTML = '';
+          if (xhr.status !== 200) {
+            list.textContent = 'Could not load votes.';
+            return;
+          }
+          var proposals = [];
+          try { proposals = JSON.parse(xhr.responseText).proposals || []; } catch (e) {}
+          if (!proposals.length) {
+            list.textContent = 'No open removal votes.';
+            return;
+          }
+          proposals.forEach(function (proposal) {
+            var card = document.createElement('div');
+            card.className = 'mod-log-item';
+            card.style.marginTop = '6px';
+            var summary = document.createElement('div');
+            var adminThreshold = proposal.eligible_admins
+              ? 'ADMIN YES: ' + proposal.yes_admins + '/' + proposal.eligible_admins + ' (need ' + proposal.threshold_admins + ')'
+              : 'No eligible admins';
+            var moderatorThreshold = proposal.eligible_moderators
+              ? 'MOD YES: ' + proposal.yes_moderators + '/' + proposal.eligible_moderators + ' (need ' + proposal.threshold_moderators + ')'
+              : 'No eligible moderators';
+            summary.textContent = '@' + proposal.target + ' — proposed by @' + proposal.proposed_by
+              + ' • ' + adminThreshold + ' OR ' + moderatorThreshold;
+            card.appendChild(summary);
+            var voterList = document.createElement('div');
+            voterList.style.fontSize = '11px';
+            voterList.textContent = proposal.votes.map(function (vote) {
+              return '@' + vote.username + ': ' + (vote.approve ? 'YES' : 'NO');
+            }).join(' · ') || 'No votes yet.';
+            card.appendChild(voterList);
+            if (proposal.my_vote === null) {
+              var approveButton = document.createElement('button');
+              approveButton.className = 'retro-btn';
+              approveButton.textContent = 'VOTE YES';
+              approveButton.onclick = function () { castAdminRemovalVote(proposal.id, true); };
+              var rejectButton = document.createElement('button');
+              rejectButton.className = 'retro-btn';
+              rejectButton.textContent = 'VOTE NO';
+              rejectButton.onclick = function () { castAdminRemovalVote(proposal.id, false); };
+              card.appendChild(approveButton);
+              card.appendChild(rejectButton);
+            } else {
+              var myVote = document.createElement('div');
+              myVote.textContent = 'Your vote: ' + (proposal.my_vote ? 'YES' : 'NO');
+              card.appendChild(myVote);
+            }
+            list.appendChild(card);
+          });
+        };
+        xhr.send();
+      }
+
+      async function proposeAdminRemoval(target) {
+        if (!isAdminUser(userRoles) && !isModeratorUser(userRoles)) return await unAlert('Only admins or moderators can propose removing an admin.');
+        if (!(await unConfirm('Open a vote to remove @' + target + ' as an admin?'))) return;
+        var xhr = new XMLHttpRequest();
+        xhr.open('POST', BACKEND_URL + '/api/admin/removal-proposals', true);
+        xhr.setRequestHeader('Content-Type', 'application/json');
+        xhr.setRequestHeader('Authorization', 'Bearer ' + token);
+        xhr.onreadystatechange = async function () {
+          if (xhr.readyState !== 4) return;
+          var result = {};
+          try { result = JSON.parse(xhr.responseText); } catch (e) {}
+          if (xhr.status >= 200 && xhr.status < 300) {
+            await unAlert('Admin removal vote opened. Eligible admins can now vote.');
+            loadAdminRemovalProposals();
+            openModLogs();
+          } else {
+            await unAlert(result.error || 'Could not open the admin removal vote.');
+          }
+        };
+        xhr.send(JSON.stringify({ target: target }));
+      }
+
+      async function castAdminRemovalVote(proposalId, approve) {
+        if (!(await unConfirm('Cast a ' + (approve ? 'YES' : 'NO') + ' vote? You cannot change it later.'))) return;
+        var xhr = new XMLHttpRequest();
+        xhr.open('POST', BACKEND_URL + '/api/admin/removal-proposals/' + encodeURIComponent(proposalId) + '/vote', true);
+        xhr.setRequestHeader('Content-Type', 'application/json');
+        xhr.setRequestHeader('Authorization', 'Bearer ' + token);
+        xhr.onreadystatechange = async function () {
+          if (xhr.readyState !== 4) return;
+          var result = {};
+          try { result = JSON.parse(xhr.responseText); } catch (e) {}
+          if (xhr.status >= 200 && xhr.status < 300) {
+            var message = result.status === 'approved'
+              ? 'The vote passed. Admin access was removed.'
+              : result.status === 'rejected'
+                ? 'The vote did not pass.'
+                : 'Your vote was recorded.';
+            await unAlert(message);
+            loadAdminRemovalProposals();
+            openModLogs();
+          } else {
+            await unAlert(result.error || 'Could not record your vote.');
+          }
+        };
+        xhr.send(JSON.stringify({ approve: approve }));
+      }
+
       function filterLogsLocally() {
         var query = document.getElementById('log-filter-input').value.toLowerCase();
         var items = document.querySelectorAll('.mod-log-item');
@@ -446,7 +564,7 @@
               var safeStatus = DOMPurify.sanitize(status);
               var safeAlts = u.alts ? DOMPurify.sanitize(u.alts.join(', ')) : '';
               var targetIsModerator = !!u.is_moderator || (Array.isArray(u.roles) && u.roles.indexOf('moderator') !== -1);
-              var targetIsAdmin = !!u.is_admin || (Array.isArray(u.roles) && u.roles.indexOf('admin') !== -1) || ['admin', 'lmao'].indexOf(u.username.toLowerCase()) !== -1;
+              var targetIsAdmin = !!u.is_admin || (Array.isArray(u.roles) && u.roles.indexOf('admin') !== -1);
 
               var html = `<div style="line-height: 1.5;">
               <strong>Username:</strong> ${safeUsername}<br>
@@ -469,8 +587,14 @@
                 <button class="retro-btn danger-btn" onclick="adminAction('mod_ban', '${safeUsername}')">BAN USER</button>
                 <button class="retro-btn" onclick="adminAction('mod_pardon', '${safeUsername}')">PARDON USER</button>
                 <button class="retro-btn danger-btn" onclick="banIP('${safeUsername}')">BAN IP</button>
+                ${targetIsAdmin && u.username.toLowerCase() !== String(myUsername || '').toLowerCase() ? `<button class="retro-btn danger-btn" onclick="proposeAdminRemoval('${safeUsername}')">PROPOSE ADMIN REMOVAL</button>` : ''}
+                ${targetIsAdmin ? '' : `<button class="retro-btn" onclick="setAssignedRole('${safeUsername}', 'admin', true)">PROMOTE TO ADMIN</button>`}
                 ${targetIsAdmin ? '' : `<button class="retro-btn" onclick="setModeratorRole('${safeUsername}', ${!targetIsModerator})">${targetIsModerator ? 'REMOVE MODERATOR' : 'PROMOTE TO MODERATOR'}</button>`}
               </div>`;
+              } else if (isModeratorUser(userRoles) && targetIsAdmin && u.username.toLowerCase() !== String(myUsername || '').toLowerCase()) {
+                html += `<div style="border-top: 1px dotted var(--border-color); padding-top:8px; margin-top:8px;">
+                  <button class="retro-btn danger-btn" onclick="proposeAdminRemoval('${safeUsername}')">PROPOSE ADMIN REMOVAL</button>
+                </div>`;
               }
               html += `</div>`;
               res.innerHTML = html;
@@ -530,9 +654,10 @@
         }, 500);
       }
 
-      async function setModeratorRole(target, enabled) {
-        if (!isAdminUser(userRoles)) return await unAlert('Only admins can promote or remove moderators.');
-        var action = enabled ? 'Promote ' + target + ' to moderator?' : 'Remove moderator access from ' + target + '?';
+      async function setAssignedRole(target, role, enabled) {
+        if (!isAdminUser(userRoles)) return await unAlert('Only admins can assign roles.');
+        var roleName = role === 'admin' ? 'administrator' : 'moderator';
+        var action = enabled ? 'Promote ' + target + ' to ' + roleName + '?' : 'Remove ' + roleName + ' access from ' + target + '?';
         if (!(await unConfirm(action))) return;
         var xhr = new XMLHttpRequest();
         xhr.open('POST', BACKEND_URL + '/api/admin/assign-role', true);
@@ -543,14 +668,22 @@
           var result = {};
           try { result = JSON.parse(xhr.responseText); } catch (e) {}
           if (xhr.status >= 200 && xhr.status < 300) {
-            await unAlert(enabled ? target + ' promoted to moderator.' : target + ' is no longer a moderator.');
+            await unAlert(enabled ? target + ' promoted to ' + roleName + '.' : target + ' is no longer a ' + roleName + '.');
             searchUserAction();
             openModLogs();
           } else {
-            await unAlert('Moderator role update failed: ' + (result.error || 'Request failed (' + xhr.status + ').'));
+            var errorMessage = result.error || 'Request failed (' + xhr.status + ').';
+            if (role === 'admin' && errorMessage.indexOf('non-admin role') !== -1) {
+              errorMessage = 'The server is running the older role-assignment code. Restart or redeploy index.js, then try again.';
+            }
+            await unAlert('Role update failed: ' + errorMessage);
           }
         };
-        xhr.send(JSON.stringify({ target: target, role: 'moderator', enabled: !!enabled }));
+        xhr.send(JSON.stringify({ target: target, role: role, enabled: !!enabled }));
+      }
+
+      async function setModeratorRole(target, enabled) {
+        return setAssignedRole(target, 'moderator', enabled);
       }
 
       async function banIP(targetUser) {

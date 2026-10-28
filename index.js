@@ -100,8 +100,6 @@ async function initDatabase() {
       ALTER TABLE users ADD COLUMN IF NOT EXISTS roles TEXT NOT NULL DEFAULT '[]';
       ALTER TABLE users ADD COLUMN IF NOT EXISTS github_token TEXT;
       ALTER TABLE users ADD COLUMN IF NOT EXISTS "BotPasswordData" TEXT;
-      UPDATE users SET is_admin = true WHERE LOWER(username) IN ('admin', 'lmao');
-
       CREATE TABLE IF NOT EXISTS mod_logs (
         id SERIAL PRIMARY KEY, mod_username TEXT NOT NULL, action_type TEXT NOT NULL,
         target_username TEXT, target_id INTEGER, reason TEXT, timestamp BIGINT NOT NULL
@@ -201,6 +199,25 @@ async function initDatabase() {
         timestamp BIGINT NOT NULL
       );
 
+      CREATE TABLE IF NOT EXISTS admin_removal_proposals (
+        id SERIAL PRIMARY KEY,
+        target_username TEXT NOT NULL REFERENCES users(username) ON DELETE CASCADE,
+        proposed_by TEXT NOT NULL REFERENCES users(username) ON DELETE CASCADE,
+        eligible_voters TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'approved', 'rejected')),
+        created_at BIGINT NOT NULL,
+        resolved_at BIGINT
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS admin_removal_one_open_per_target
+        ON admin_removal_proposals (target_username) WHERE status = 'open';
+      CREATE TABLE IF NOT EXISTS admin_removal_votes (
+        proposal_id INTEGER NOT NULL REFERENCES admin_removal_proposals(id) ON DELETE CASCADE,
+        voter_username TEXT NOT NULL REFERENCES users(username) ON DELETE CASCADE,
+        approve BOOLEAN NOT NULL,
+        created_at BIGINT NOT NULL,
+        PRIMARY KEY (proposal_id, voter_username)
+      );
+
       CREATE TABLE IF NOT EXISTS "portal-2d" (
         "level-id" SERIAL PRIMARY KEY,
         "level-name" VARCHAR(255) NOT NULL,
@@ -294,10 +311,10 @@ async function blockBannedIPs(req, res, next) {
 }
 app.use(blockBannedIPs);
 
-const ADMIN_ENTITY_USERNAMES = new Set(['admin', 'lmao']);
+const INITIAL_ADMIN_USERNAMES = new Set(['admin', 'lmao']);
 
 const adminUserSql = (alias) =>
-  `(${alias}.is_admin OR LOWER(${alias}.username) IN ('admin', 'lmao') OR ${alias}.roles::jsonb @> '["admin"]')`;
+  `(${alias}.is_admin OR ${alias}.roles::jsonb @> '["admin"]')`;
 
 const moderatorUserSql = (alias) =>
   `(${alias}.is_moderator OR ${alias}.roles::jsonb @> '["moderator"]')`;
@@ -342,14 +359,13 @@ async function getUserRoles(username) {
     role_style: '',
     role_class: '',
   };
-  const adminEntity = ADMIN_ENTITY_USERNAMES.has(cacheKey);
   try {
     res.roles = JSON.parse(res.roles || '[]');
   } catch {
     res.roles = [];
   }
   const roleList = Array.isArray(res.roles) ? res.roles : [];
-  res.is_admin = !!res.is_admin || adminEntity || roleList.includes('admin');
+  res.is_admin = !!res.is_admin || roleList.includes('admin');
   res.is_moderator = !!res.is_moderator || roleList.includes('moderator');
   res.role = {
     role:
@@ -1248,10 +1264,10 @@ app.post('/api/register', async (req, res) => {
   log(`Registration request: ${username} from ${ip}`);
   try {
     const hash = await bcrypt.hash(password, 10);
-    const isAdminEntity = ADMIN_ENTITY_USERNAMES.has(username.toLowerCase());
+    const isInitialAdmin = INITIAL_ADMIN_USERNAMES.has(username.toLowerCase());
     await db.query(
       'INSERT INTO users (username, password_hash, last_ip, is_admin) VALUES ($1, $2, $3, $4);',
-      [username, hash, ip, isAdminEntity],
+      [username, hash, ip, isInitialAdmin],
     );
     await db.query(
       'INSERT INTO profiles (username) VALUES ($1) ON CONFLICT DO NOTHING;',
@@ -1807,14 +1823,14 @@ app.post('/api/admin/assign-role', authenticateToken, async (req, res) => {
   if (
     !target ||
     !/^[a-z][a-z0-9_-]{1,31}$/.test(role) ||
-    role === 'admin' ||
+    (role === 'admin' && enabled !== true) ||
     typeof enabled !== 'boolean'
   ) {
     return res
       .status(400)
       .json({
         error:
-          'Choose a valid user, non-admin role, and assign or remove action.',
+          'Choose a valid user and role. The admin role can only be granted.',
       });
   }
   try {
@@ -1826,12 +1842,16 @@ app.post('/api/admin/assign-role', authenticateToken, async (req, res) => {
     if (!userResult.rows[0])
       return res.status(404).json({ error: 'User not found.' });
     if (
+      role === 'admin' &&
+      (userResult.rows[0].is_admin || userResult.rows[0].has_admin_role)
+    )
+      return res.status(409).json({ error: 'That user is already an administrator.' });
+    if (
       role === 'moderator' &&
-      (userResult.rows[0].is_admin || userResult.rows[0].has_admin_role ||
-        ADMIN_ENTITY_USERNAMES.has(userResult.rows[0].username.toLowerCase()))
+      (userResult.rows[0].is_admin || userResult.rows[0].has_admin_role)
     )
       return res.status(400).json({ error: 'Administrator accounts cannot be changed here.' });
-    if (role !== 'moderator') {
+    if (role !== 'moderator' && role !== 'admin') {
       const roleResult = await db.query(
         'SELECT role FROM roles WHERE role = $1;',
         [role],
@@ -1847,6 +1867,8 @@ app.post('/api/admin/assign-role', authenticateToken, async (req, res) => {
     }
     if (!Array.isArray(assignedRoles)) assignedRoles = [];
     assignedRoles = assignedRoles.filter((item) => typeof item === 'string');
+    if (role === 'admin')
+      assignedRoles = assignedRoles.filter((item) => item !== 'moderator');
     const hasRole = assignedRoles.includes(role);
     if (enabled && !hasRole) assignedRoles.push(role);
     if (!enabled && hasRole)
@@ -1854,6 +1876,10 @@ app.post('/api/admin/assign-role', authenticateToken, async (req, res) => {
     if (role === 'moderator') {
       await db.query('UPDATE users SET roles = $1, is_moderator = $2 WHERE username = $3;', [
         JSON.stringify(assignedRoles), enabled, userResult.rows[0].username,
+      ]);
+    } else if (role === 'admin') {
+      await db.query('UPDATE users SET roles = $1, is_admin = true, is_moderator = false WHERE username = $2;', [
+        JSON.stringify(assignedRoles), userResult.rows[0].username,
       ]);
     } else {
       await db.query('UPDATE users SET roles = $1 WHERE username = $2;', [
@@ -1877,6 +1903,294 @@ app.post('/api/admin/assign-role', authenticateToken, async (req, res) => {
     res
       .status(503)
       .json({ error: 'Database temporarily unavailable. Try again shortly.' });
+  }
+});
+
+app.get('/api/admin/removal-proposals', authenticateToken, async (req, res) => {
+  if (!hasAdminPrivileges(req.user) && !hasModeratorPrivileges(req.user))
+    return res.status(403).json({ error: 'Unauthorized' });
+  try {
+    await db.query(
+      `UPDATE admin_removal_proposals p SET status = 'rejected', resolved_at = $1
+        WHERE p.status = 'open' AND NOT EXISTS (
+          SELECT 1 FROM users u
+           WHERE u.username = p.target_username AND ${adminUserSql('u')}
+        );`,
+      [Date.now()],
+    );
+    const result = await db.query(
+      `SELECT p.id, p.target_username, p.proposed_by, p.eligible_voters,
+              p.created_at, p.status,
+              COALESCE(json_agg(json_build_object(
+                'username', v.voter_username, 'approve', v.approve
+              ) ORDER BY v.voter_username) FILTER (WHERE v.voter_username IS NOT NULL), '[]') AS votes
+         FROM admin_removal_proposals p
+         LEFT JOIN admin_removal_votes v ON v.proposal_id = p.id
+        WHERE p.status = 'open'
+        GROUP BY p.id
+        ORDER BY p.created_at DESC;`,
+    );
+    const [activeAdminsResult, activeModeratorsResult] = await Promise.all([
+      db.query(`SELECT LOWER(u.username) AS username FROM users u WHERE ${adminUserSql('u')};`),
+      db.query(`SELECT LOWER(u.username) AS username FROM users u WHERE ${moderatorUserSql('u')};`),
+    ]);
+    const activeAdmins = new Set(activeAdminsResult.rows.map((row) => row.username));
+    const activeModerators = new Set(activeModeratorsResult.rows.map((row) => row.username));
+    const viewer = req.user.username.toLowerCase();
+    const proposals = result.rows.flatMap((row) => {
+      let electorate = { admins: [], moderators: [] };
+      try {
+        electorate = JSON.parse(row.eligible_voters || '{}');
+        if (Array.isArray(electorate)) electorate = { admins: electorate, moderators: [] };
+      } catch {}
+      const admins = (electorate.admins || []).filter((name) => activeAdmins.has(String(name).toLowerCase()));
+      const moderators = (electorate.moderators || []).filter((name) => activeModerators.has(String(name).toLowerCase()));
+      const eligibleSet = new Set(admins.concat(moderators).map((name) => String(name).toLowerCase()));
+      if (!eligibleSet.has(viewer)) return [];
+      const votes = (Array.isArray(row.votes) ? row.votes : []).filter((vote) =>
+        eligibleSet.has(String(vote.username).toLowerCase()),
+      );
+      const yesAdmins = votes.filter((vote) => vote.approve && admins.some((name) => name.toLowerCase() === vote.username.toLowerCase())).length;
+      const yesModerators = votes.filter((vote) => vote.approve && moderators.some((name) => name.toLowerCase() === vote.username.toLowerCase())).length;
+      return [{
+        id: row.id,
+        target: row.target_username,
+        proposed_by: row.proposed_by,
+        created_at: row.created_at,
+        eligible_admins: admins.length,
+        eligible_moderators: moderators.length,
+        threshold_admins: Math.ceil(admins.length * 0.5),
+        threshold_moderators: Math.ceil(moderators.length * 0.8),
+        yes_admins: yesAdmins,
+        yes_moderators: yesModerators,
+        my_vote: votes.find((vote) => String(vote.username).toLowerCase() === viewer)?.approve ?? null,
+        votes,
+      }];
+    });
+    res.json({ proposals });
+  } catch (error) {
+    log('Admin removal proposal lookup failed:', error.message);
+    res.status(503).json({ error: 'Could not load admin removal votes.' });
+  }
+});
+
+app.post('/api/admin/removal-proposals', authenticateToken, async (req, res) => {
+  if (!hasAdminPrivileges(req.user) && !hasModeratorPrivileges(req.user))
+    return res.status(403).json({ error: 'Unauthorized' });
+  const target = sanitizeUsername(req.body && req.body.target);
+  if (!target || !/^[a-z][a-z0-9_-]{1,31}$/i.test(target))
+    return res.status(400).json({ error: 'Enter a valid admin username.' });
+  if (target.toLowerCase() === req.user.username.toLowerCase())
+    return res.status(400).json({ error: 'You cannot propose removing yourself.' });
+
+  let client;
+  try {
+    client = await db.connect();
+    await client.query('BEGIN');
+    const targetResult = await client.query(
+      `SELECT u.username FROM users u
+        WHERE LOWER(u.username) = LOWER($1) AND ${adminUserSql('u')}
+        FOR UPDATE;`,
+      [target],
+    );
+    if (!targetResult.rows[0]) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'That user is not an admin.' });
+    }
+    const targetUsername = targetResult.rows[0].username;
+    const voterResult = await client.query(
+      `SELECT u.username, ${adminUserSql('u')} AS is_admin,
+              ${moderatorUserSql('u')} AS is_moderator
+         FROM users u
+        WHERE (${adminUserSql('u')} OR ${moderatorUserSql('u')})
+          AND LOWER(u.username) <> LOWER($1)
+        ORDER BY LOWER(u.username);`,
+      [targetUsername],
+    );
+    const electorate = {
+      admins: voterResult.rows.filter((row) => row.is_admin).map((row) => row.username),
+      moderators: voterResult.rows.filter((row) => row.is_moderator).map((row) => row.username),
+    };
+    const eligibleVoters = new Set(electorate.admins.concat(electorate.moderators).map((name) => name.toLowerCase()));
+    if (!eligibleVoters.has(req.user.username.toLowerCase())) {
+      await client.query('ROLLBACK');
+      return res.status(403).json({ error: 'Only current admins or moderators can propose removals.' });
+    }
+    const existing = await client.query(
+      `SELECT id FROM admin_removal_proposals
+        WHERE target_username = $1 AND status = 'open';`,
+      [targetUsername],
+    );
+    if (existing.rows[0]) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({ error: 'An open removal vote already exists for that admin.' });
+    }
+    const createdAt = Date.now();
+    const proposalResult = await client.query(
+      `INSERT INTO admin_removal_proposals
+        (target_username, proposed_by, eligible_voters, created_at)
+       VALUES ($1, $2, $3, $4) RETURNING id;`,
+      [targetUsername, req.user.username, JSON.stringify(electorate), createdAt],
+    );
+    const proposalId = proposalResult.rows[0].id;
+    await client.query(
+      `INSERT INTO mod_logs (mod_username, action_type, target_username, reason, timestamp)
+       VALUES ($1, 'admin_removal_proposed', $2, $3, $4);`,
+      [req.user.username, targetUsername, `Proposal #${proposalId}`, createdAt],
+    );
+    await client.query('COMMIT');
+    res.json({ success: true, proposal_id: proposalId });
+  } catch (error) {
+    if (client) await client.query('ROLLBACK').catch(() => {});
+    if (error.code === '23505')
+      return res.status(409).json({ error: 'An open removal vote already exists for that admin.' });
+    log('Admin removal proposal creation failed:', error.message);
+    res.status(503).json({ error: 'Could not create an admin removal vote.' });
+  } finally {
+    if (client) client.release();
+  }
+});
+
+app.post('/api/admin/removal-proposals/:id/vote', authenticateToken, async (req, res) => {
+  if (!hasAdminPrivileges(req.user) && !hasModeratorPrivileges(req.user))
+    return res.status(403).json({ error: 'Unauthorized' });
+  const proposalId = Number(req.params.id);
+  const approve = req.body && req.body.approve;
+  if (!Number.isSafeInteger(proposalId) || proposalId < 1 || typeof approve !== 'boolean')
+    return res.status(400).json({ error: 'Choose approve or reject for a valid vote.' });
+
+  let client;
+  try {
+    client = await db.connect();
+    await client.query('BEGIN');
+    const proposalResult = await client.query(
+      `SELECT id, target_username, eligible_voters, status
+         FROM admin_removal_proposals WHERE id = $1 FOR UPDATE;`,
+      [proposalId],
+    );
+    const proposal = proposalResult.rows[0];
+    if (!proposal) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'Removal vote not found.' });
+    }
+    if (proposal.status !== 'open') {
+      await client.query('ROLLBACK');
+      return res.status(409).json({ error: 'This removal vote is already closed.' });
+    }
+    let electorate = { admins: [], moderators: [] };
+    try {
+      electorate = JSON.parse(proposal.eligible_voters || '{}');
+      if (Array.isArray(electorate)) electorate = { admins: electorate, moderators: [] };
+    } catch {}
+    const voter = req.user.username;
+    const targetResult = await client.query(
+      `SELECT u.username, u.roles FROM users u
+        WHERE u.username = $1 AND ${adminUserSql('u')}
+        FOR UPDATE;`,
+      [proposal.target_username],
+    );
+    if (!targetResult.rows[0]) {
+      await client.query(
+        `UPDATE admin_removal_proposals SET status = 'rejected', resolved_at = $1 WHERE id = $2;`,
+        [Date.now(), proposalId],
+      );
+      await client.query('COMMIT');
+      return res.status(409).json({ error: 'The target is no longer an admin; this vote has been closed.' });
+    }
+    const activeVotersResult = await client.query(
+      `SELECT u.username, ${adminUserSql('u')} AS is_admin,
+              ${moderatorUserSql('u')} AS is_moderator
+         FROM users u
+        WHERE (${adminUserSql('u')} OR ${moderatorUserSql('u')})
+          AND LOWER(u.username) <> LOWER($1);`,
+      [proposal.target_username],
+    );
+    const activeAdmins = new Set(activeVotersResult.rows.filter((row) => row.is_admin).map((row) => row.username.toLowerCase()));
+    const activeModerators = new Set(activeVotersResult.rows.filter((row) => row.is_moderator).map((row) => row.username.toLowerCase()));
+    electorate.admins = (electorate.admins || []).filter((name) => activeAdmins.has(String(name).toLowerCase()));
+    electorate.moderators = (electorate.moderators || []).filter((name) => activeModerators.has(String(name).toLowerCase()));
+    const eligibleVoters = new Set(electorate.admins.concat(electorate.moderators).map((name) => name.toLowerCase()));
+    if (!eligibleVoters.has(voter.toLowerCase())) {
+      await client.query('ROLLBACK');
+      return res.status(403).json({ error: 'Only current admins or moderators eligible for this proposal can vote.' });
+    }
+    await client.query(
+      'UPDATE admin_removal_proposals SET eligible_voters = $1 WHERE id = $2;',
+      [JSON.stringify(electorate), proposalId],
+    );
+    const voteResult = await client.query(
+      `INSERT INTO admin_removal_votes (proposal_id, voter_username, approve, created_at)
+       VALUES ($1, $2, $3, $4) ON CONFLICT (proposal_id, voter_username) DO NOTHING;`,
+      [proposalId, voter, approve, Date.now()],
+    );
+    if (!voteResult.rowCount) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({ error: 'You have already voted on this proposal.' });
+    }
+    const tallyResult = await client.query(
+      `SELECT voter_username, approve FROM admin_removal_votes WHERE proposal_id = $1;`,
+      [proposalId],
+    );
+    const votes = tallyResult.rows;
+    const adminSet = new Set(electorate.admins.map((name) => name.toLowerCase()));
+    const moderatorSet = new Set(electorate.moderators.map((name) => name.toLowerCase()));
+    const adminVotes = votes.filter((vote) => adminSet.has(vote.voter_username.toLowerCase()));
+    const moderatorVotes = votes.filter((vote) => moderatorSet.has(vote.voter_username.toLowerCase()));
+    const yesAdmins = adminVotes.filter((vote) => vote.approve).length;
+    const yesModerators = moderatorVotes.filter((vote) => vote.approve).length;
+    const thresholdAdmins = Math.ceil(electorate.admins.length * 0.5);
+    const thresholdModerators = Math.ceil(electorate.moderators.length * 0.8);
+    const adminPass = electorate.admins.length > 0 && yesAdmins >= thresholdAdmins;
+    const moderatorPass = electorate.moderators.length > 0 && yesModerators >= thresholdModerators;
+    let status = 'open';
+    if (adminPass || moderatorPass) {
+      let roles = [];
+      try { roles = JSON.parse(targetResult.rows[0].roles || '[]'); } catch {}
+      if (!Array.isArray(roles)) roles = [];
+      roles = roles.filter((role) => role !== 'admin');
+      await client.query(
+        'UPDATE users SET is_admin = false, roles = $1 WHERE username = $2;',
+        [JSON.stringify(roles), proposal.target_username],
+      );
+      status = 'approved';
+    } else {
+      const adminPossible = yesAdmins + electorate.admins.length - adminVotes.length >= thresholdAdmins;
+      const moderatorPossible = yesModerators + electorate.moderators.length - moderatorVotes.length >= thresholdModerators;
+      if ((!adminPossible || electorate.admins.length === 0) &&
+          (!moderatorPossible || electorate.moderators.length === 0)) status = 'rejected';
+    }
+    if (status !== 'open') {
+      await client.query(
+        `UPDATE admin_removal_proposals SET status = $1, resolved_at = $2 WHERE id = $3;`,
+        [status, Date.now(), proposalId],
+      );
+    }
+    await client.query(
+      `INSERT INTO mod_logs (mod_username, action_type, target_username, reason, timestamp)
+       VALUES ($1, 'admin_removal_vote', $2, $3, $4);`,
+      [voter, proposal.target_username, `Proposal #${proposalId}: ${approve ? 'approve' : 'reject'} (${status})`, Date.now()],
+    );
+    await client.query('COMMIT');
+    if (status === 'approved') {
+      invalidateUserRoleCache(proposal.target_username);
+      const targetClient = activeClients.get(proposal.target_username);
+      if (targetClient) {
+        targetClient.ws.send(JSON.stringify({
+          type: 'terminated',
+          reason: 'Your administrator access was removed by a vote.',
+        }));
+        targetClient.ws.close();
+        activeClients.delete(proposal.target_username);
+        broadcastSystemUpdate(getRosterPayload());
+      }
+    }
+    res.json({ success: true, status, yes_admins: yesAdmins, yes_moderators: yesModerators, threshold_admins: thresholdAdmins, threshold_moderators: thresholdModerators });
+  } catch (error) {
+    if (client) await client.query('ROLLBACK').catch(() => {});
+    log('Admin removal vote failed:', error.message);
+    res.status(503).json({ error: 'Could not record the admin removal vote.' });
+  } finally {
+    if (client) client.release();
   }
 });
 
@@ -1913,7 +2227,6 @@ app.post('/api/admin/ban-ip', authenticateToken, async (req, res) => {
       if (
         row.is_bot ||
         row.is_admin ||
-        ADMIN_ENTITY_USERNAMES.has(String(row.username || '').toLowerCase()) ||
         roles.includes('admin')
       ) {
         return res.status(400).json({
@@ -2246,11 +2559,7 @@ const P2D_OFFICIAL_MAX_LEVELS = 80;
 const P2D_OFFICIAL_MAX_CHARS = 400000;
 
 const p2dIsAdmin = (user) =>
-  !!(
-    user &&
-    (user.is_admin ||
-      ADMIN_ENTITY_USERNAMES.has(String(user.username || '').toLowerCase()))
-  );
+  !!(user && user.is_admin);
 const p2dIsStaff = (user) => p2dIsAdmin(user) || hasModeratorPrivileges(user);
 
 function p2dName(value, fallback, maxLen) {
