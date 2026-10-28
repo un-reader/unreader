@@ -311,7 +311,10 @@
       border: var(--border-width) solid var(--border-color);
       box-shadow: 4px 4px 0 var(--border-color);
       padding: 24px;
-      width: 320px;
+      width: 440px;
+      max-width: calc(100vw - 24px);
+      max-height: calc(100vh - 24px);
+      overflow-y: auto;
       box-sizing: border-box;
     }
 
@@ -321,6 +324,42 @@
       border-bottom: var(--border-width) solid var(--border-color);
       padding-bottom: 6px;
       margin-bottom: 16px;
+    }
+
+    .auth-box label,
+    .auth-box .auth-help,
+    #github-vault-status {
+      display: block;
+      margin: 8px 0;
+      font-size: 11px;
+      line-height: 1.4;
+    }
+
+    .auth-box input[type="password"],
+    .auth-box input[type="text"] {
+      width: 100%;
+      box-sizing: border-box;
+    }
+
+    .readme-content img,
+    #editor-preview img {
+      max-width: 100%;
+      height: auto;
+    }
+
+    #editor-box {
+      display: block;
+      min-height: 240px;
+      resize: vertical;
+      white-space: pre;
+      overflow: auto;
+    }
+
+    #editor-preview {
+      display: none;
+      max-height: 55vh;
+      overflow: auto;
+      white-space: normal;
     }
   </style>
   <script src="common.js"></script>
@@ -332,10 +371,25 @@
       <div class="auth-box">
         <h2>GitHub Token Auth</h2>
         <input type="password" id="token-input" class="retro-input" placeholder="ghp_xxxxxxxxxxxx"
-          style="margin-bottom: 15px" />
+          autocomplete="off" style="margin-bottom: 8px" />
+        <label><input type="checkbox" id="save-github-key"> Save Key to your Unreader account with a PIN</label>
+        <label for="github-key-pin">Key PIN (at least 6 characters)</label>
+        <input type="password" id="github-key-pin" class="retro-input" autocomplete="off" />
+        <div id="github-key-pin-confirm-row" style="display:none">
+          <label for="github-key-pin-confirm">Confirm PIN</label>
+          <input type="password" id="github-key-pin-confirm" class="retro-input" autocomplete="off" />
+        </div>
+        <p id="github-vault-status" role="status" aria-live="polite"></p>
         <button class="retro-btn" style="width: 100%; margin-bottom: 8px" onclick="saveToken()">
-          SAVE TO LOCAL & ACCOUNT
+          USE TOKEN / SAVE ENCRYPTED KEY
         </button>
+        <button id="load-github-key" class="retro-btn" style="display:none; width:100%; margin-bottom:8px" onclick="loadSavedGitHubToken()">
+          LOAD SAVED KEY
+        </button>
+        <button id="remove-github-key" class="retro-btn" style="display:none; width:100%; margin-bottom:8px" onclick="removeSavedGitHubToken()">
+          REMOVE SAVED KEY
+        </button>
+        <p class="auth-help">GitHub tokens are encrypted in this browser with your PIN before upload. The PIN is never sent to the server. If you used the old local or account save, enter that key above, select Save Key, and choose a PIN to migrate it; the old copy is cleared after the encrypted save succeeds. Without Save Key, the token is kept in memory for this visit only.</p>
         <button class="retro-btn" style="width: 100%" onclick="toggleAuth(false)">
           CLOSE
         </button>
@@ -393,6 +447,12 @@
                 Forks: <span class="roster-name" id="stat-forks">-</span>
               </div>
             </div>
+            <div id="repo-controls" style="display:none; padding:8px">
+              <div class="panel-header">Branch</div>
+              <select id="branch-selector" class="retro-input" onchange="switchBranch(this.value)"></select>
+              <button class="retro-btn" style="width:100%; margin-top:6px" onclick="openNewBranchForm()">NEW BRANCH</button>
+              <button class="retro-btn" style="width:100%; margin-top:6px" onclick="downloadRepoZip()">DOWNLOAD SOURCE ZIP</button>
+            </div>
 
             <div class="panel-header">My Repositories</div>
             <div id="sidebar-my-repos">
@@ -429,13 +489,20 @@
 
   <script type="text/javascript">
     var currentRepo = '';
-    var ghToken = localStorage.getItem('gh_token') || '';
+    var currentBranch = '';
+    var currentRepoPrivate = false;
+    var releasePage = 1;
+    var legacyLocalGitHubToken = localStorage.getItem('gh_token') || '';
+    var ghToken = legacyLocalGitHubToken;
+    var githubVaultRecord = null;
+    // Keep the old local copy until an encrypted account save succeeds.
     var unreaderToken = localStorage.getItem('token') || '';
     var pages = ['Loading...'];
     var currentPage = 0;
     var currentFileSha = '';
     var currentFileRaw = '';
     var currentFilePath = '';
+    var currentFileDownloadUrl = '';
 
     function apiRequest(method, url, acceptHeader, bodyObj, callback) {
       var xhr = new XMLHttpRequest();
@@ -460,6 +527,63 @@
         }
       };
       xhr.send(bodyObj ? JSON.stringify(bodyObj) : null);
+    }
+
+    function escapeHtml(value) {
+      return String(value == null ? '' : value)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    }
+
+    function inlineArg(value) {
+      return escapeHtml(JSON.stringify(String(value)));
+    }
+
+    function contentsUrl(path) {
+      var encodedPath = path ? path.split('/').map(encodeURIComponent).join('/') : '';
+      return 'https://api.github.com/repos/' + currentRepo + '/contents/' + encodedPath +
+        '?ref=' + encodeURIComponent(currentBranch);
+    }
+
+    function showDownloadFailure(message, fallbackUrl) {
+      var html = '<div class="message"><div class="message-text">' + escapeHtml(message) + '</div>';
+      if (fallbackUrl) html += '<div class="mod-action-tray"><a class="mod-tray-btn" href="' + escapeHtml(fallbackUrl) + '" target="_blank" rel="noopener">OPEN DIRECT DOWNLOAD</a></div>';
+      setPages([html + '</div>']);
+    }
+
+    function downloadFromGitHub(url, filename, acceptHeader, fallbackUrl) {
+      var xhr = new XMLHttpRequest();
+      xhr.open('GET', url, true);
+      xhr.responseType = 'blob';
+      xhr.setRequestHeader('Accept', acceptHeader || 'application/vnd.github+json');
+      if (ghToken) xhr.setRequestHeader('Authorization', 'Bearer ' + ghToken);
+      xhr.onload = function () {
+        if (xhr.status < 200 || xhr.status >= 300) {
+          showDownloadFailure('Download failed (HTTP ' + xhr.status + '). Check token access and repository permissions.', fallbackUrl);
+          return;
+        }
+        var blob = xhr.response;
+        if (!blob || !window.URL || !window.URL.createObjectURL) {
+          showDownloadFailure('This browser cannot save the downloaded file.', fallbackUrl);
+          return;
+        }
+        var objectUrl = window.URL.createObjectURL(blob);
+        var link = document.createElement('a');
+        link.href = objectUrl;
+        link.download = filename || 'download';
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        setTimeout(function () { window.URL.revokeObjectURL(objectUrl); }, 60000);
+      };
+      xhr.onerror = function () {
+        showDownloadFailure('Download failed. The browser or GitHub may have blocked this file download.', fallbackUrl);
+      };
+      xhr.send();
+      setPages(['<div class="message"><div class="message-text">Preparing download: ' + escapeHtml(filename) + '...</div></div>']);
     }
 
     function decodeBase64Utf8(base64) {
@@ -523,9 +647,12 @@
     function showHome() {
       setActiveNav('nav-home');
       currentRepo = '';
+      currentBranch = '';
+      currentRepoPrivate = false;
       document.getElementById('stat-current').innerHTML = 'Home';
       document.getElementById('stat-stars').innerHTML = '-';
       document.getElementById('stat-forks').innerHTML = '-';
+      document.getElementById('repo-controls').style.display = 'none';
       document.getElementById('sidebar-tree-header').style.display = 'none';
       document.getElementById('sidebar-tree').innerHTML = '';
 
@@ -574,7 +701,7 @@
           if (err) {
             callback(
               '<div class="message"><div class="message-text">Failed to load user repos: ' +
-              err +
+              escapeHtml(err) +
               '</div></div>',
             );
             return;
@@ -592,24 +719,24 @@
             var r = repos[i];
             html += '<div class="message"><div class="message-text">';
             html +=
-              '<span class="roster-name" onclick="loadRepo(\'' +
-              r.full_name +
-              '\')">' +
-              r.full_name +
+              '<span class="roster-name" onclick="loadRepo(' +
+              inlineArg(r.full_name) +
+              ')">' +
+              escapeHtml(r.full_name) +
               '</span> (Stars: ' +
               r.stargazers_count +
               ')<br>';
-            html += r.description || 'No description.';
+            html += escapeHtml(r.description || 'No description.');
             html +=
-              '</div><div class="mod-action-tray"><button class="mod-tray-btn" onclick="loadRepo(\'' +
-              r.full_name +
-              '\')">Open Repo</button></div></div>';
+              '</div><div class="mod-action-tray"><button class="mod-tray-btn" onclick="loadRepo(' +
+              inlineArg(r.full_name) +
+              ')">Open Repo</button></div></div>';
 
             sidebarHtml +=
-              '<div class="roster-user"><span class="roster-name" onclick="loadRepo(\'' +
-              r.full_name +
-              '\')">' +
-              r.name +
+              '<div class="roster-user"><span class="roster-name" onclick="loadRepo(' +
+              inlineArg(r.full_name) +
+              ')">' +
+              escapeHtml(r.name) +
               '</span></div>';
           }
           document.getElementById('sidebar-my-repos').innerHTML = sidebarHtml;
@@ -626,12 +753,21 @@
     }
 
     function loadRepo(repoName) {
+      repoName = String(repoName || '').replace(/^\s+|\s+$/g, '');
+      if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repoName)) {
+        setPages(['<div class="message"><div class="message-text">Enter a repository as owner/repository.</div></div>']);
+        return;
+      }
       currentRepo = repoName;
+      currentBranch = '';
+      currentRepoPrivate = false;
+      document.getElementById('repo-controls').style.display = 'none';
+      releasePage = 1;
       document.getElementById('repo-input').value = repoName;
-      document.getElementById('stat-current').innerHTML = repoName;
+      document.getElementById('stat-current').textContent = repoName;
       setPages([
         '<div class="message"><div class="message-text">Fetching ' +
-        repoName +
+        escapeHtml(repoName) +
         '...</div></div>',
       ]);
 
@@ -644,22 +780,150 @@
           if (err) {
             setPages([
               '<div class="message"><div class="message-text">' +
-              err +
+              escapeHtml(err) +
               '</div></div>',
             ]);
             return;
           }
           var data = JSON.parse(res);
+          currentRepoPrivate = !!data.private;
           document.getElementById('stat-stars').innerHTML =
             data.stargazers_count;
           document.getElementById('stat-forks').innerHTML =
             data.forks_count || 0;
+          currentBranch = data.default_branch || 'main';
+          document.getElementById('repo-controls').style.display = 'block';
+          loadBranches();
           document.getElementById('sidebar-tree-header').style.display =
             'block';
           loadDirectory('', true);
           switchTab('readme');
         },
       );
+    }
+
+    function loadBranches() {
+      var select = document.getElementById('branch-selector');
+      select.innerHTML = '';
+      apiRequest('GET', 'https://api.github.com/repos/' + currentRepo + '/branches?per_page=100', null, null, function (err, response) {
+        if (err) {
+          var fallback = document.createElement('option');
+          fallback.value = currentBranch;
+          fallback.textContent = currentBranch + ' (default)';
+          select.appendChild(fallback);
+          return;
+        }
+        var branches;
+        try { branches = JSON.parse(response); } catch (error) { branches = []; }
+        for (var i = 0; i < branches.length; i++) {
+          var option = document.createElement('option');
+          option.value = branches[i].name;
+          option.textContent = branches[i].name;
+          option.selected = branches[i].name === currentBranch;
+          select.appendChild(option);
+        }
+        if (!branches.length) {
+          var defaultOption = document.createElement('option');
+          defaultOption.value = currentBranch;
+          defaultOption.textContent = currentBranch;
+          select.appendChild(defaultOption);
+        }
+      });
+    }
+
+    function switchBranch(branch) {
+      if (!branch || branch === currentBranch) return;
+      currentBranch = branch;
+      loadDirectory('', true);
+      switchTab('readme');
+    }
+
+    function openNewBranchForm() {
+      if (!requireGitHubToken()) return;
+      var html = '<div class="admin-msg"><div class="message-text">CREATE BRANCH</div></div>';
+      html += '<div class="message"><label for="new-branch-name">New branch name</label>';
+      html += '<input type="text" id="new-branch-name" class="retro-input" placeholder="feature/my-change">';
+      html += '<div class="message-text">The new branch starts from ' + escapeHtml(currentBranch) + '.</div></div>';
+      html += '<div class="mod-action-tray"><button class="mod-tray-btn" onclick="createBranch()">CREATE BRANCH</button>';
+      html += '<button class="mod-tray-btn" onclick="switchTab(\'files\')">CANCEL</button></div>';
+      setPages([html]);
+      document.getElementById('new-branch-name').focus();
+    }
+
+    function createBranch() {
+      var name = document.getElementById('new-branch-name').value.replace(/^\s+|\s+$/g, '');
+      if (!name || name.length > 240 || name.charAt(0) === '/' || name.charAt(name.length - 1) === '/' ||
+          name.indexOf('//') !== -1 || name.indexOf('..') !== -1 || name.indexOf('@{') !== -1 ||
+          /[\s~^:?*\[\]\\]/.test(name)) {
+        setPages(['<div class="message"><div class="message-text">Enter a valid branch name.</div></div>']);
+        return;
+      }
+      apiRequest('GET', 'https://api.github.com/repos/' + currentRepo + '/git/ref/heads/' + encodeURIComponent(currentBranch), null, null, function (err, response) {
+        if (err) {
+          setPages(['<div class="message"><div class="message-text">Could not read the current branch: ' + escapeHtml(err) + '</div></div>']);
+          return;
+        }
+        var ref;
+        try { ref = JSON.parse(response); } catch (error) { ref = null; }
+        if (!ref || !ref.object || !ref.object.sha) {
+          setPages(['<div class="message"><div class="message-text">GitHub did not return a branch commit.</div></div>']);
+          return;
+        }
+        apiRequest('POST', 'https://api.github.com/repos/' + currentRepo + '/git/refs', null,
+          { ref: 'refs/heads/' + name, sha: ref.object.sha }, function (createError) {
+            if (createError) {
+              setPages(['<div class="message"><div class="message-text">Branch creation failed: ' + escapeHtml(createError) + '</div></div>']);
+              return;
+            }
+            currentBranch = name;
+            loadBranches();
+            switchTab('files');
+          });
+      });
+    }
+
+    function requireGitHubToken() {
+      if (ghToken) return true;
+      alert('Enter a GitHub token with the required repository permissions.');
+      toggleAuth(true);
+      return false;
+    }
+
+    function downloadRepoZip(refOverride) {
+      if (!currentRepo) return;
+      var ref = refOverride || currentBranch || 'HEAD';
+      var filename = currentRepo.replace('/', '-') + '-' + ref.replace(/[^A-Za-z0-9._-]/g, '-') + '.zip';
+      var url = 'https://api.github.com/repos/' + currentRepo + '/zipball/' + encodeURIComponent(ref);
+      var archiveKind = refOverride ? 'tags' : 'heads';
+      var directUrl = 'https://github.com/' + currentRepo + '/archive/refs/' + archiveKind + '/' +
+        ref.split('/').map(encodeURIComponent).join('/') + '.zip';
+      if (!currentRepoPrivate) {
+        var directLink = document.createElement('a');
+        directLink.href = directUrl;
+        directLink.target = '_blank';
+        directLink.rel = 'noopener';
+        document.body.appendChild(directLink);
+        directLink.click();
+        document.body.removeChild(directLink);
+        return;
+      }
+      if (!window.confirm('This private source archive will be downloaded into browser memory first. Very large repositories may exceed this device’s memory. Continue?')) return;
+      downloadFromGitHub(url, filename, 'application/vnd.github+json', directUrl);
+    }
+
+    function downloadReleaseAsset(apiUrl, filename, browserUrl) {
+      if (!currentRepoPrivate && browserUrl) {
+        var directLink = document.createElement('a');
+        directLink.href = browserUrl;
+        directLink.target = '_blank';
+        directLink.rel = 'noopener';
+        document.body.appendChild(directLink);
+        directLink.click();
+        document.body.removeChild(directLink);
+        return;
+      }
+      if (!window.confirm('This private release asset will be downloaded into browser memory first. Large files may exceed this device’s memory. Continue?')) return;
+      downloadFromGitHub(apiUrl, filename, 'application/octet-stream', browserUrl);
     }
 
     function switchTab(tab) {
@@ -694,7 +958,7 @@
       ]);
       apiRequest(
         'GET',
-        'https://api.github.com/repos/' + currentRepo + '/readme',
+        'https://api.github.com/repos/' + currentRepo + '/readme?ref=' + encodeURIComponent(currentBranch),
         'application/vnd.github.html+json',
         null,
         function (err, html) {
@@ -704,9 +968,10 @@
             ]);
             return;
           }
+          var safeHtml = window.DOMPurify ? DOMPurify.sanitize(html) : escapeHtml(html);
           var header =
             '<div class="admin-msg"><div class="message-text">' +
-            currentRepo +
+            escapeHtml(currentRepo) + ' @ ' + escapeHtml(currentBranch) +
             ' // README.md</div></div>';
           var modTray =
             '<div class="mod-action-tray">MOD ACTIONS: <button class="mod-tray-btn" onclick="viewFile(\'README.md\')">View / Edit README.md</button></div>';
@@ -714,7 +979,7 @@
             header +
             modTray +
             '<div class="message readme-content"><div class="message-text">' +
-            html +
+            safeHtml +
             '</div></div>',
           ]);
         },
@@ -725,16 +990,21 @@
       if (!currentRepo) return;
       apiRequest(
         'GET',
-        'https://api.github.com/repos/' + currentRepo + '/contents/' + path,
+        contentsUrl(path),
         null,
         null,
         function (err, res) {
-          if (err) return;
-          var items = JSON.parse(res);
+          if (err) {
+            if (!sidebarOnly) setPages(['<div class="message"><div class="message-text">Could not load this directory: ' + escapeHtml(err) + '</div></div>']);
+            return;
+          }
+          var items;
+          try { items = JSON.parse(res); } catch (error) { items = []; }
+          if (!Array.isArray(items)) items = [items];
           var treeHtml = '';
           var mainHtml =
             '<div class="admin-msg"><div class="message-text">INDEX OF /' +
-            path +
+            escapeHtml(path) + ' @ ' + escapeHtml(currentBranch) +
             '</div></div>';
 
           mainHtml += '<div class="mod-action-tray">MOD ACTIONS: ';
@@ -744,48 +1014,49 @@
                 ? ''
                 : path.substring(0, path.lastIndexOf('/'));
             treeHtml +=
-              '<div class="nav-item" onclick="loadDirectory(\'' +
-              parent +
-              '\', false)">.. (UP)</div>';
+              '<div class="nav-item" onclick="loadDirectory(' +
+              inlineArg(parent) +
+              ', false)">.. (UP)</div>';
             mainHtml +=
-              '<button class="mod-tray-btn" onclick="loadDirectory(\'' +
-              parent +
-              '\', false)">Up Dir</button> ';
+              '<button class="mod-tray-btn" onclick="loadDirectory(' +
+              inlineArg(parent) +
+              ', false)">Up Dir</button> ';
           }
           mainHtml +=
-            '<button class="mod-tray-btn" onclick="openNewFileEditor(\'' +
-            path +
-            '\')">+ New File Here</button></div>';
+            '<button class="mod-tray-btn" onclick="openNewFileEditor(' +
+            inlineArg(path) +
+            ')">+ New File Here</button>' +
+            '<button class="mod-tray-btn" onclick="openUploadFileForm(' + inlineArg(path) + ')">Upload File</button></div>';
 
           for (var i = 0; i < items.length; i++) {
             var it = items[i];
             if (it.type === 'dir') {
               treeHtml +=
-                '<div class="nav-item" onclick="loadDirectory(\'' +
-                it.path +
-                '\', false)">[DIR] ' +
-                it.name +
+                '<div class="nav-item" onclick="loadDirectory(' +
+                inlineArg(it.path) +
+                ', false)">[DIR] ' +
+                escapeHtml(it.name) +
                 '/</div>';
               mainHtml +=
-                '<div class="message"><div class="message-text">[DIR] <span class="roster-name" onclick="loadDirectory(\'' +
-                it.path +
-                '\', false)">' +
-                it.name +
+                '<div class="message"><div class="message-text">[DIR] <span class="roster-name" onclick="loadDirectory(' +
+                inlineArg(it.path) +
+                ', false)">' +
+                escapeHtml(it.name) +
                 '/</span></div></div>';
             } else {
               treeHtml +=
-                '<div class="nav-item" onclick="viewFile(\'' +
-                it.path +
-                '\')">' +
-                it.name +
+                '<div class="nav-item" onclick="viewFile(' +
+                inlineArg(it.path) +
+                ')">' +
+                escapeHtml(it.name) +
                 '</div>';
               mainHtml +=
-                '<div class="message"><div class="message-text">[FILE] <span class="roster-name" onclick="viewFile(\'' +
-                it.path +
-                '\')">' +
-                it.name +
+                '<div class="message"><div class="message-text">[FILE] <span class="roster-name" onclick="viewFile(' +
+                inlineArg(it.path) +
+                ')">' +
+                escapeHtml(it.name) +
                 '</span> (' +
-                it.size +
+                Number(it.size || 0) +
                 ' B)</div></div>';
             }
           }
@@ -803,13 +1074,13 @@
       currentFilePath = path;
       setPages([
         '<div class="message"><div class="message-text">Opening ' +
-        path +
+        escapeHtml(path) +
         '...</div></div>',
       ]);
 
       apiRequest(
         'GET',
-        'https://api.github.com/repos/' + currentRepo + '/contents/' + path,
+        contentsUrl(path),
         null,
         null,
         function (err, res) {
@@ -823,28 +1094,32 @@
           }
           var fileObj = JSON.parse(res);
           currentFileSha = fileObj.sha;
-
-          var raw = '';
-          if (fileObj.content) {
-            raw = decodeBase64Utf8(fileObj.content);
-          } else {
-            raw = 'File content empty or binary.';
-          }
-
+          currentFileDownloadUrl = fileObj.download_url || '';
+          var raw = fileObj.content && fileObj.encoding === 'base64'
+            ? decodeBase64Utf8(fileObj.content)
+            : '';
           currentFileRaw = raw;
-          var safe = raw
-            .replace(/&/g, '&amp;')
-            .replace(/</g, '&lt;')
-            .replace(/>/g, '&gt;');
+          var textFile = (fileObj.encoding === 'base64' || Number(fileObj.size) === 0) && isTextFile(path);
+          var safe = escapeHtml(raw);
           var lines = safe.split('\n');
           var linesPerPage = 35;
           var chunks = [];
+          var modBar = '<div class="mod-action-tray">FILE ACTIONS: ';
+          modBar += '<button class="mod-tray-btn" onclick="downloadCurrentFile()">Download</button>';
+          if (textFile) {
+            modBar += '<button class="mod-tray-btn" onclick="openFileEditor()">Edit File</button>';
+            if (isMarkdownFile(path)) modBar += '<button class="mod-tray-btn" onclick="previewCurrentFile()">Preview Markdown</button>';
+          }
+          modBar += '<button class="mod-tray-btn" onclick="deleteCurrentFile()">Delete File</button></div>';
 
-          var modBar =
-            '<div class="mod-action-tray">FILE MOD: ' +
-            '<button class="mod-tray-btn" onclick="openFileEditor()">Edit File</button>' +
-            '<button class="mod-tray-btn" onclick="deleteCurrentFile()">Delete File</button>' +
-            '</div>';
+          if (!textFile) {
+            var info = '<div class="admin-msg"><div class="message-text">FILE: ' + escapeHtml(path) + '</div></div>';
+            info += '<div class="message"><div class="message-text">' +
+              (fileObj.size > 0 ? 'Size: ' + Number(fileObj.size) + ' bytes. ' : '') +
+              'This file is binary, too large for the inline editor, or has no text content. Download it to view or edit locally.</div></div>';
+            setPages([info + modBar]);
+            return;
+          }
 
           for (var i = 0; i < lines.length; i += linesPerPage) {
             var slice = lines.slice(i, i + linesPerPage);
@@ -861,7 +1136,7 @@
             }
             var header =
               '<div class="admin-msg"><div class="message-text">FILE: ' +
-              path +
+              escapeHtml(path) + ' @ ' + escapeHtml(currentBranch) +
               ' (Lines ' +
               (i + 1) +
               '-' +
@@ -880,82 +1155,215 @@
       );
     }
 
-    function openFileEditor() {
-      if (!ghToken) {
-        alert('Save your GitHub Token first!');
-        toggleAuth(true);
+    function isMarkdownFile(path) {
+      return /\.(md|markdown|mdown|mkdn)$/i.test(path) || /(^|\/)(readme|license|changelog)$/i.test(path);
+    }
+
+    function isTextFile(path) {
+      if (isMarkdownFile(path) || /(^|\/)(makefile|dockerfile|license|copying|notice|readme|gitignore|gitattributes|editorconfig)$/i.test(path)) return true;
+      return /\.(txt|text|json|js|mjs|cjs|ts|tsx|jsx|html?|css|scss|less|xml|ya?ml|toml|ini|cfg|conf|sh|bash|zsh|py|rb|php|java|kt|go|rs|c|h|cc|cpp|hpp|cs|sql|mdx|gradle|properties|svg)$/i.test(path);
+    }
+
+    function downloadCurrentFile() {
+      if (!currentFilePath) return;
+      if (!currentRepoPrivate && currentFileDownloadUrl) {
+        var directLink = document.createElement('a');
+        directLink.href = currentFileDownloadUrl;
+        directLink.target = '_blank';
+        directLink.rel = 'noopener';
+        document.body.appendChild(directLink);
+        directLink.click();
+        document.body.removeChild(directLink);
         return;
       }
-      var safeText = currentFileRaw
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;');
+      if (!window.confirm('This private file will be downloaded into browser memory first. Continue?')) return;
+      downloadFromGitHub(contentsUrl(currentFilePath), currentFilePath.split('/').pop(), 'application/vnd.github.raw', currentFileDownloadUrl);
+    }
+
+    function renderMarkdown(markdown, callback) {
+      apiRequest('POST', 'https://api.github.com/markdown', 'application/vnd.github+json', {
+        text: markdown,
+        mode: 'gfm',
+        context: currentRepo
+      }, callback);
+    }
+
+    function previewCurrentFile() {
+      if (!isMarkdownFile(currentFilePath)) return;
+      renderMarkdown(currentFileRaw, function (err, html) {
+        var rendered = err
+          ? '<pre>' + escapeHtml(currentFileRaw) + '</pre>'
+          : (window.DOMPurify ? DOMPurify.sanitize(html) : escapeHtml(html));
+        setPages([
+          '<div class="admin-msg"><div class="message-text">PREVIEW: ' + escapeHtml(currentFilePath) + '</div></div>' +
+          '<div class="mod-action-tray"><button class="mod-tray-btn" onclick="viewFile(' + inlineArg(currentFilePath) + ')">SOURCE</button>' +
+          '<button class="mod-tray-btn" onclick="openFileEditor()">EDIT</button></div>' +
+          '<div class="message readme-content"><div class="message-text">' + rendered + '</div></div>'
+        ]);
+      });
+      setPages(['<div class="message"><div class="message-text">Rendering Markdown preview...</div></div>']);
+    }
+
+    function openFileEditor() {
+      if (!requireGitHubToken()) return;
       var html =
         '<div class="admin-msg"><div class="message-text">EDITING // ' +
-        currentFilePath +
+        escapeHtml(currentFilePath) + ' @ ' + escapeHtml(currentBranch) +
         '</div></div>';
       html += '<div class="message"><div class="message-text">';
       html += '<b>Commit Message:</b><br>';
       html +=
         '<input type="text" id="commit-msg" class="retro-input" style="width:100%;margin:4px 0 10px 0;" value="Update ' +
-        currentFilePath +
-        ' via Kindle"><br>';
+        escapeHtml(currentFilePath) +
+        ' via GitHub Workspace"><br>';
       html += '<b>File Content:</b><br>';
       html +=
-        '<textarea id="editor-box" class="retro-input" style="width:100%;height:240px;font-family:monospace;white-space:pre;">' +
-        safeText +
-        '</textarea>';
+        '<textarea id="editor-box" class="retro-input">' +
+        escapeHtml(currentFileRaw) +
+        '</textarea><div id="editor-preview" class="message-text"></div>';
       html += '</div>';
       html += '<div class="mod-action-tray">';
       html +=
-        '<button class="mod-tray-btn" onclick="commitFileChanges(false)">Commit & Push</button>';
+        '<button class="mod-tray-btn" id="editor-preview-toggle" onclick="previewEditorContent()">Preview</button>' +
+        '<button class="mod-tray-btn" onclick="commitFileChanges(false)">Commit Changes</button>';
       html +=
-        '<button class="mod-tray-btn" onclick="viewFile(\'' +
-        currentFilePath +
-        '\')">Cancel</button>';
+        '<button class="mod-tray-btn" onclick="viewFile(' + inlineArg(currentFilePath) + ')">Cancel</button>';
       html += '</div></div>';
       setPages([html]);
     }
 
-    function openNewFileEditor(folderPath) {
-      if (!ghToken) {
-        alert('Save your GitHub Token first!');
-        toggleAuth(true);
+    function previewEditorContent() {
+      var source = document.getElementById('editor-box').value;
+      var preview = document.getElementById('editor-preview');
+      var toggle = document.getElementById('editor-preview-toggle');
+      var newFilePath = document.getElementById('new-file-path');
+      var previewPath = currentFilePath || (newFilePath ? newFilePath.value : '');
+      document.getElementById('editor-box').style.display = 'none';
+      preview.style.display = 'block';
+      toggle.textContent = 'EDIT SOURCE';
+      toggle.onclick = showEditorSource;
+      if (isMarkdownFile(previewPath)) {
+        preview.innerHTML = 'Rendering Markdown...';
+        renderMarkdown(source, function (err, html) {
+          preview.innerHTML = err
+            ? '<pre>' + escapeHtml(source) + '</pre>'
+            : (window.DOMPurify ? DOMPurify.sanitize(html) : escapeHtml(html));
+        });
+      } else {
+        preview.innerHTML = '<pre>' + escapeHtml(source) + '</pre>';
+      }
+    }
+
+    function showEditorSource() {
+      document.getElementById('editor-box').style.display = 'block';
+      document.getElementById('editor-preview').style.display = 'none';
+      var toggle = document.getElementById('editor-preview-toggle');
+      toggle.textContent = 'PREVIEW';
+      toggle.onclick = previewEditorContent;
+    }
+
+    function openUploadFileForm(folderPath) {
+      if (!requireGitHubToken()) return;
+      var prefix = folderPath ? folderPath + '/' : '';
+      var html = '<div class="admin-msg"><div class="message-text">UPLOAD FILE TO ' + escapeHtml(currentBranch) + '</div></div>';
+      html += '<div class="message"><label for="upload-source-file">Choose a local file (up to 5 MB)</label>';
+      html += '<input type="file" id="upload-source-file" class="retro-input">';
+      html += '<label for="upload-file-path">Repository path</label>';
+      html += '<input type="text" id="upload-file-path" class="retro-input" value="' + escapeHtml(prefix) + '">';
+      html += '<label for="upload-commit-message">Commit message</label>';
+      html += '<input type="text" id="upload-commit-message" class="retro-input" value="Upload file">';
+      html += '<div id="upload-file-name" class="message-text">Choose a file to fill in its name.</div></div>';
+      html += '<div class="mod-action-tray"><button class="mod-tray-btn" onclick="uploadFileToRepo()">UPLOAD AND COMMIT</button>';
+      html += '<button class="mod-tray-btn" onclick="loadDirectory(' + inlineArg(folderPath) + ', false)">CANCEL</button></div>';
+      setPages([html]);
+      var input = document.getElementById('upload-source-file');
+      input.onchange = function () {
+        var file = input.files && input.files[0];
+        if (!file) return;
+        document.getElementById('upload-file-path').value = prefix + file.name;
+        document.getElementById('upload-file-name').textContent = file.name + ' (' + Math.ceil(file.size / 1024) + ' KB)';
+      };
+    }
+
+    function uploadFileToRepo() {
+      if (!requireGitHubToken()) return;
+      var fileInput = document.getElementById('upload-source-file');
+      var file = fileInput && fileInput.files && fileInput.files[0];
+      var path = document.getElementById('upload-file-path').value.replace(/^\s+|\s+$/g, '');
+      if (!file || !path || path.charAt(0) === '/' || path.split('/').indexOf('..') !== -1) {
+        alert('Choose a file and enter a valid repository-relative path.');
         return;
       }
+      if (file.size > 5 * 1024 * 1024) {
+        alert('Files over 5 MB are not supported by this Kindle-friendly upload form.');
+        return;
+      }
+      var commitMessage = document.getElementById('upload-commit-message').value || 'Upload ' + file.name;
+      var reader = new FileReader();
+      setPages(['<div class="message"><div class="message-text">Reading ' + escapeHtml(file.name) + '...</div></div>']);
+      reader.onerror = function () { setPages(['<div class="message"><div class="message-text">Could not read this file from the device.</div></div>']); };
+      reader.onload = function () {
+        var base64 = String(reader.result).split(',')[1] || '';
+        var payload = {
+          message: commitMessage,
+          content: base64,
+          branch: currentBranch
+        };
+        apiRequest('PUT', contentsUrl(path), null, payload, function (err) {
+          if (err) {
+            setPages(['<div class="message"><div class="message-text">Upload failed: ' + escapeHtml(err) + '</div></div>']);
+            return;
+          }
+          var parent = path.indexOf('/') === -1 ? '' : path.substring(0, path.lastIndexOf('/'));
+          loadDirectory(parent, false);
+        });
+      };
+      reader.readAsDataURL(file);
+    }
+
+    function openNewFileEditor(folderPath) {
+      if (!requireGitHubToken()) return;
+      currentFilePath = '';
+      currentFileSha = '';
+      currentFileRaw = '';
       var prefix = folderPath ? folderPath + '/' : '';
       var html =
-        '<div class="admin-msg"><div class="message-text">CREATE NEW FILE</div></div>';
+        '<div class="admin-msg"><div class="message-text">CREATE FILE ON ' + escapeHtml(currentBranch) + '</div></div>';
       html += '<div class="message"><div class="message-text">';
       html += '<b>File Path:</b><br>';
       html +=
         '<input type="text" id="new-file-path" class="retro-input" style="width:100%;margin:4px 0 8px 0;" value="' +
-        prefix +
+        escapeHtml(prefix) +
         'newfile.txt"><br>';
       html += '<b>Commit Message:</b><br>';
       html +=
         '<input type="text" id="commit-msg" class="retro-input" style="width:100%;margin:4px 0 8px 0;" value="Create file via Kindle"><br>';
       html += '<b>File Content:</b><br>';
       html +=
-        '<textarea id="editor-box" class="retro-input" style="width:100%;height:200px;font-family:monospace;"></textarea>';
+        '<textarea id="editor-box" class="retro-input"></textarea>' +
+        '<div id="editor-preview" class="message-text"></div>';
       html += '</div>';
       html += '<div class="mod-action-tray">';
       html +=
-        '<button class="mod-tray-btn" onclick="commitFileChanges(true)">Create & Push</button>';
+        '<button class="mod-tray-btn" id="editor-preview-toggle" onclick="previewEditorContent()">Preview</button>' +
+        '<button class="mod-tray-btn" onclick="commitFileChanges(true)">Create File</button>';
       html +=
-        '<button class="mod-tray-btn" onclick="loadDirectory(\'' +
-        folderPath +
-        '\', false)">Cancel</button>';
+        '<button class="mod-tray-btn" onclick="loadDirectory(' + inlineArg(folderPath) + ', false)">Cancel</button>';
       html += '</div></div>';
       setPages([html]);
     }
 
     function commitFileChanges(isNew) {
+      if (!requireGitHubToken()) return;
       var targetPath = isNew
         ? document
           .getElementById('new-file-path')
           .value.replace(/^\s+|\s+$/g, '')
         : currentFilePath;
+      if (!targetPath || targetPath.charAt(0) === '/' || targetPath.split('/').indexOf('..') !== -1) {
+        alert('Enter a valid repository-relative file path.');
+        return;
+      }
       var msg =
         document.getElementById('commit-msg').value || 'Updated via Kindle';
       var newContent = document.getElementById('editor-box').value;
@@ -963,6 +1371,7 @@
       var payload = {
         message: msg,
         content: utf8ToBase64(newContent),
+        branch: currentBranch,
       };
       if (!isNew && currentFileSha) {
         payload.sha = currentFileSha;
@@ -970,22 +1379,19 @@
 
       setPages([
         '<div class="message"><div class="message-text">Pushing commit to ' +
-        targetPath +
+        escapeHtml(targetPath) + ' on ' + escapeHtml(currentBranch) +
         '...</div></div>',
       ]);
       apiRequest(
         'PUT',
-        'https://api.github.com/repos/' +
-        currentRepo +
-        '/contents/' +
-        targetPath,
+        contentsUrl(targetPath),
         null,
         payload,
         function (err) {
           if (err) {
             setPages([
               '<div class="message"><div class="message-text">COMMIT FAILED:\n' +
-              err +
+              escapeHtml(err) +
               '</div></div>',
             ]);
             return;
@@ -997,11 +1403,7 @@
     }
 
     function deleteCurrentFile() {
-      if (!ghToken) {
-        alert('Save your GitHub Token first!');
-        toggleAuth(true);
-        return;
-      }
+      if (!requireGitHubToken()) return;
       if (
         !confirm('Delete ' + currentFilePath + ' from ' + currentRepo + '?')
       )
@@ -1010,25 +1412,23 @@
       var payload = {
         message: 'Delete ' + currentFilePath + ' via Kindle',
         sha: currentFileSha,
+        branch: currentBranch,
       };
       setPages([
         '<div class="message"><div class="message-text">Deleting ' +
-        currentFilePath +
+        escapeHtml(currentFilePath) +
         '...</div></div>',
       ]);
       apiRequest(
         'DELETE',
-        'https://api.github.com/repos/' +
-        currentRepo +
-        '/contents/' +
-        currentFilePath,
+        contentsUrl(currentFilePath),
         null,
         payload,
         function (err) {
           if (err) {
             setPages([
               '<div class="message"><div class="message-text">DELETE FAILED:\n' +
-              err +
+              escapeHtml(err) +
               '</div></div>',
             ]);
             return;
@@ -1052,7 +1452,7 @@
           if (err) {
             setPages([
               '<div class="message"><div class="message-text">' +
-              err +
+              escapeHtml(err) +
               '</div></div>',
             ]);
             return;
@@ -1082,16 +1482,14 @@
               modTray;
             for (var j = i; j < Math.min(i + perPage, issues.length); j++) {
               var iss = issues[j];
-              var bodyText = (iss.body || 'No description.')
-                .replace(/</g, '&lt;')
-                .substring(0, 280);
+              var bodyText = escapeHtml((iss.body || 'No description.').substring(0, 280));
               html +=
                 '<div class="message"><div class="message-text"><b>#' +
-                iss.number +
+                Number(iss.number) +
                 ' ' +
-                iss.title +
+                escapeHtml(iss.title) +
                 '</b><br>By @' +
-                iss.user.login +
+                escapeHtml(iss.user.login) +
                 ' | Comments: ' +
                 iss.comments +
                 '<br><br>' +
@@ -1158,8 +1556,9 @@
       );
     }
 
-    function loadReleases() {
+    function loadReleases(page) {
       if (!currentRepo) return;
+      if (page) releasePage = page;
       setPages([
         '<div class="message"><div class="message-text">Loading Releases...</div></div>',
       ]);
@@ -1167,7 +1566,7 @@
         'GET',
         'https://api.github.com/repos/' +
         currentRepo +
-        '/releases?per_page=10',
+        '/releases?per_page=10&page=' + releasePage,
         null,
         null,
         function (err, res) {
@@ -1180,8 +1579,14 @@
             return;
           }
           var rels = JSON.parse(res);
+          var pageNav = '<div class="mod-action-tray">';
+          if (releasePage > 1) pageNav += '<button class="mod-tray-btn" onclick="loadReleases(' + (releasePage - 1) + ')">NEWER RELEASES</button>';
+          if (rels.length === 10) pageNav += '<button class="mod-tray-btn" onclick="loadReleases(' + (releasePage + 1) + ')">OLDER RELEASES</button>';
+          pageNav += '<button class="mod-tray-btn" onclick="downloadRepoZip()">SOURCE ZIP (' + escapeHtml(currentBranch) + ')</button></div>';
           if (!rels.length) {
             setPages([
+              '<div class="admin-msg"><div class="message-text">RELEASES // ' + escapeHtml(currentRepo) + ' // PAGE ' + releasePage + '</div></div>' +
+              pageNav +
               '<div class="message"><div class="message-text">No releases published for this repo.</div></div>',
             ]);
             return;
@@ -1189,19 +1594,35 @@
           var chunks = [];
           for (var i = 0; i < rels.length; i++) {
             var r = rels[i];
-            var notes = (r.body || 'No release notes.').replace(/</g, '&lt;');
+            var notes = escapeHtml(r.body || 'No release notes.');
             var html =
               '<div class="admin-msg"><div class="message-text">RELEASE: ' +
-              (r.name || r.tag_name) +
+              escapeHtml(r.name || r.tag_name) +
               ' (' +
-              r.tag_name +
+              escapeHtml(r.tag_name) +
               ')</div></div>';
+            html += '<div class="mod-action-tray">';
+            html += '<button class="mod-tray-btn" onclick="downloadRepoZip(' + inlineArg(r.tag_name) + ')">SOURCE ZIP</button>';
+            if (r.html_url) html += '<a class="mod-tray-btn" href="' + escapeHtml(r.html_url) + '" target="_blank" rel="noopener">OPEN RELEASE PAGE</a>';
+            html += '</div>';
             html +=
-              '<div class="message"><div class="message-text">' +
+              '<div class="message"><div class="message-text" style="white-space:pre-wrap">' +
               notes +
               '</div></div>';
+            if (r.assets && r.assets.length) {
+              html += '<div class="mod-action-tray"><b>RELEASE DOWNLOADS:</b> ';
+              for (var j = 0; j < r.assets.length; j++) {
+                var asset = r.assets[j];
+                html += '<button class="mod-tray-btn" onclick="downloadReleaseAsset(' + inlineArg(asset.url) + ', ' + inlineArg(asset.name) + ', ' + inlineArg(asset.browser_download_url) + ')">' +
+                  escapeHtml(asset.name) + ' (' + Math.ceil(Number(asset.size || 0) / 1024) + ' KB)</button>';
+              }
+              html += '</div>';
+            } else {
+              html += '<div class="message"><div class="message-text">No attached release files.</div></div>';
+            }
             chunks.push(html);
           }
+          chunks.unshift('<div class="admin-msg"><div class="message-text">RELEASES // ' + escapeHtml(currentRepo) + ' // PAGE ' + releasePage + '</div></div>' + pageNav);
           setPages(chunks);
         },
       );
@@ -1214,7 +1635,7 @@
       if (!q) return;
       setPages([
         '<div class="message"><div class="message-text">Searching GitHub for "' +
-        q +
+        escapeHtml(q) +
         '"...</div></div>',
       ]);
       apiRequest(
@@ -1228,32 +1649,32 @@
           if (err) {
             setPages([
               '<div class="message"><div class="message-text">' +
-              err +
+              escapeHtml(err) +
               '</div></div>',
             ]);
             return;
           }
           var items = JSON.parse(res).items;
           var html =
-            '<div class="admin-msg"><div class="message-text">SEARCH RESULTS FOR: ' +
-            q +
+              '<div class="admin-msg"><div class="message-text">SEARCH RESULTS FOR: ' +
+              escapeHtml(q) +
             '</div></div>';
           for (var i = 0; i < items.length; i++) {
             var r = items[i];
             html += '<div class="message"><div class="message-text">';
             html +=
-              '<span class="roster-name" onclick="loadRepo(\'' +
-              r.full_name +
-              '\')">' +
-              r.full_name +
+              '<span class="roster-name" onclick="loadRepo(' +
+              inlineArg(r.full_name) +
+              ')">' +
+              escapeHtml(r.full_name) +
               '</span> (Stars: ' +
               r.stargazers_count +
               ')<br>';
-            html += r.description || 'No description.';
+            html += escapeHtml(r.description || 'No description.');
             html +=
-              '</div><div class="mod-action-tray"><button class="mod-tray-btn" onclick="loadRepo(\'' +
-              r.full_name +
-              '\')">Open Repo</button></div></div>';
+              '</div><div class="mod-action-tray"><button class="mod-tray-btn" onclick="loadRepo(' +
+              inlineArg(r.full_name) +
+              ')">Open Repo</button></div></div>';
           }
           setPages([html]);
         },
@@ -1264,18 +1685,120 @@
       document.getElementById('auth-screen').style.display = show
         ? 'flex'
         : 'none';
-      if (show && ghToken) {
+      if (show && ghToken && !document.getElementById('token-input').value) {
         document.getElementById('token-input').value = ghToken;
       }
+      if (show) refreshGitHubVault();
+    }
+
+    function setGitHubVaultStatus(message, isError) {
+      var status = document.getElementById('github-vault-status');
+      status.textContent = message || '';
+      status.style.color = isError ? '#a00000' : '';
+    }
+
+    function refreshGitHubVault() {
+      UnreaderGitHubTokenVault.status().then(function (result) {
+        githubVaultRecord = result.data || null;
+        var hasSavedKey = !!githubVaultRecord || !!result.legacyToken;
+        document.getElementById('load-github-key').style.display = hasSavedKey ? 'block' : 'none';
+        document.getElementById('remove-github-key').style.display = hasSavedKey ? 'block' : 'none';
+        if (githubVaultRecord) {
+          setGitHubVaultStatus(result.legacyToken
+            ? 'An encrypted key and an older plaintext account copy both exist. Saving this key with a PIN will remove the plaintext copy.'
+            : 'An encrypted GitHub key is saved to your account. Enter its PIN and choose LOAD SAVED KEY.');
+        } else if (result.legacyToken) {
+          if (!ghToken) {
+            ghToken = result.legacyToken;
+            document.getElementById('token-input').value = ghToken;
+            showHome();
+          }
+          setGitHubVaultStatus('An older plaintext account key was found. It is loaded for this visit; select Save Key and choose a PIN to encrypt and migrate it.');
+        } else if (legacyLocalGitHubToken) {
+          setGitHubVaultStatus('Your old browser-saved key is loaded. Select Save Key and choose a PIN to migrate it; the old copy will be cleared after the encrypted save succeeds.');
+        }
+      }).catch(function (error) {
+        if (legacyLocalGitHubToken) {
+          setGitHubVaultStatus('Your old browser-saved key is loaded. Sign in to your Unreader account to encrypt and save it with a PIN; the old copy remains until that succeeds.');
+        }
+      });
     }
 
     function saveToken() {
-      ghToken = document
-        .getElementById('token-input')
-        .value.replace(/^\s+|\s+$/g, '');
-      localStorage.setItem('gh_token', ghToken);
-      toggleAuth(false);
-      showHome();
+      var value = document.getElementById('token-input').value.replace(/^\s+|\s+$/g, '');
+      var saveKey = document.getElementById('save-github-key').checked;
+      var pin = document.getElementById('github-key-pin').value;
+      if (!value) {
+        setGitHubVaultStatus('Enter a GitHub token first.', true);
+        return;
+      }
+      if (!saveKey) {
+        ghToken = value;
+        document.getElementById('github-key-pin').value = '';
+        document.getElementById('github-key-pin-confirm').value = '';
+        toggleAuth(false);
+        showHome();
+        setGitHubVaultStatus(legacyLocalGitHubToken
+          ? 'Token is active. The old browser-saved copy remains until you migrate it with Save Key and a PIN.'
+          : 'Token is active for this visit only. Select Save Key and set a PIN to keep it on your account.');
+        return;
+      }
+      var problem = UnreaderGitHubTokenVault.pinProblem(pin);
+      if (problem) { setGitHubVaultStatus(problem, true); return; }
+      if (pin !== document.getElementById('github-key-pin-confirm').value) {
+        setGitHubVaultStatus('The two PINs do not match.', true);
+        return;
+      }
+      var button = document.querySelector('#auth-screen .auth-box button');
+      button.disabled = true;
+      setGitHubVaultStatus('Encrypting and saving the GitHub key...');
+      UnreaderGitHubTokenVault.save({ token: value }, pin).then(function () {
+        ghToken = value;
+        legacyLocalGitHubToken = '';
+        localStorage.removeItem('gh_token');
+        githubVaultRecord = null;
+        document.getElementById('github-key-pin').value = '';
+        document.getElementById('github-key-pin-confirm').value = '';
+        document.getElementById('save-github-key').checked = false;
+        document.getElementById('github-key-pin-confirm-row').style.display = 'none';
+        setGitHubVaultStatus('Key encrypted and saved. The old plaintext account copy was removed.');
+        toggleAuth(false);
+        showHome();
+        refreshGitHubVault();
+      }).catch(function (error) {
+        setGitHubVaultStatus(error.message, true);
+      }).then(function () { button.disabled = false; });
+    }
+
+    function loadSavedGitHubToken() {
+      var pin = document.getElementById('github-key-pin').value;
+      if (!githubVaultRecord) {
+        setGitHubVaultStatus('The saved key is still in the old plaintext format. It should be filled in above for migration.', true);
+        return;
+      }
+      UnreaderGitHubTokenVault.load(pin, githubVaultRecord).then(function (credential) {
+        if (!credential || typeof credential.token !== 'string' || !credential.token) throw new Error('Saved GitHub key data is incomplete.');
+        ghToken = credential.token;
+        document.getElementById('token-input').value = ghToken;
+        document.getElementById('github-key-pin').value = '';
+        toggleAuth(false);
+        showHome();
+      }).catch(function (error) { setGitHubVaultStatus(error.message, true); });
+    }
+
+    function removeSavedGitHubToken() {
+      if (!window.confirm('Remove saved GitHub keys from your account? This also removes any older plaintext account copy.')) return;
+      UnreaderGitHubTokenVault.remove().then(function () {
+        githubVaultRecord = null;
+        legacyLocalGitHubToken = '';
+        localStorage.removeItem('gh_token');
+        ghToken = '';
+        document.getElementById('token-input').value = '';
+        document.getElementById('load-github-key').style.display = 'none';
+        document.getElementById('remove-github-key').style.display = 'none';
+        setGitHubVaultStatus('Removed saved GitHub keys from your account.');
+        showHome();
+      }).catch(function (error) { setGitHubVaultStatus(error.message, true); });
     }
 
     function flashInk() {
@@ -1284,6 +1807,11 @@
         document.body.style.filter = 'none';
       }, 180);
     }
+
+    document.getElementById('save-github-key').onchange = function () {
+      document.getElementById('github-key-pin-confirm-row').style.display = this.checked ? 'block' : 'none';
+    };
+    refreshGitHubVault();
 
     // Initialize application home state on boot
     showHome();

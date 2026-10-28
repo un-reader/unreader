@@ -99,6 +99,7 @@ async function initDatabase() {
       ALTER TABLE users ADD COLUMN IF NOT EXISTS is_bot BOOLEAN DEFAULT false;
       ALTER TABLE users ADD COLUMN IF NOT EXISTS roles TEXT NOT NULL DEFAULT '[]';
       ALTER TABLE users ADD COLUMN IF NOT EXISTS github_token TEXT;
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS "GitHubTokenData" TEXT;
       ALTER TABLE users ADD COLUMN IF NOT EXISTS "BotPasswordData" TEXT;
       CREATE TABLE IF NOT EXISTS mod_logs (
         id SERIAL PRIMARY KEY, mod_username TEXT NOT NULL, action_type TEXT NOT NULL,
@@ -265,6 +266,7 @@ async function initDatabase() {
         PRIMARY KEY (page, per_page)
       );
     `);
+
     log('Structural migration successful.');
   } catch (err) {
     log('DB MIGRATION FAILURE:', err);
@@ -1150,25 +1152,76 @@ app.post('/api/pets', authenticateToken, async (req, res) => {
   }
 });
 
-// Endpoint to save gh key on un-reader acc
-app.post('/api/user/github-token', authenticateToken, async (req, res) => {
+function isValidGitHubTokenVault(value) {
+  return (
+    value &&
+    typeof value === 'object' &&
+    value.version === 2 &&
+    value.context === 'unreader-github-token-pin-v2' &&
+    value.kdf === 'PBKDF2-SHA-256' &&
+    value.iterations === 600000 &&
+    value.cipher === 'AES-GCM-256' &&
+    /^[A-Za-z0-9+/]{20,24}={0,2}$/.test(value.salt || '') &&
+    /^[A-Za-z0-9+/]{16}={0,2}$/.test(value.iv || '') &&
+    /^[A-Za-z0-9+/]+={0,2}$/.test(value.ciphertext || '') &&
+    value.ciphertext.length <= 12000
+  );
+}
+
+app.get('/api/user/github-token-vault', authenticateToken, async (req, res) => {
   try {
-    const { github_token } = req.body;
-    if (!github_token) {
-      return res.status(400).json({ error: 'Missing github_token' });
+    const result = await db.query(
+      'SELECT "GitHubTokenData", github_token FROM users WHERE username = $1;',
+      [req.user.username],
+    );
+    let data = null;
+    if (result.rows[0] && result.rows[0].GitHubTokenData) {
+      try {
+        data = JSON.parse(result.rows[0].GitHubTokenData);
+      } catch (error) {
+        return res.status(500).json({ error: 'Saved GitHub key data is invalid.' });
+      }
     }
-
-    await db.query('UPDATE users SET github_token = $1 WHERE username = $2;', [
-      sanitize(github_token),
-      req.user.username,
-    ]);
-
-    log(`GitHub token updated for user: ${req.user.username}`);
-    res.json({ success: true });
-  } catch (err) {
-    log('Failed to save GitHub token:', err.message);
-    res.status(500).json({ error: 'Server error: ' + err.message });
+    res.json({ data, legacyToken: result.rows[0]?.github_token || null });
+  } catch (error) {
+    log('GitHub key lookup failed:', error.message);
+    res.status(500).json({ error: 'Could not load saved GitHub key data.' });
   }
+});
+
+app.put('/api/user/github-token-vault', authenticateToken, async (req, res) => {
+  const data = req.body && req.body.data;
+  if (!isValidGitHubTokenVault(data))
+    return res.status(400).json({ error: 'Encrypted GitHub key data is invalid.' });
+  try {
+    // A successful encrypted save also removes the old plaintext account copy.
+    await db.query(
+      'UPDATE users SET "GitHubTokenData" = $1, github_token = NULL WHERE username = $2;',
+      [JSON.stringify(data), req.user.username],
+    );
+    res.json({ success: true });
+  } catch (error) {
+    log('GitHub key save failed:', error.message);
+    res.status(500).json({ error: 'Could not save encrypted GitHub key data.' });
+  }
+});
+
+app.delete('/api/user/github-token-vault', authenticateToken, async (req, res) => {
+  try {
+    await db.query(
+      'UPDATE users SET "GitHubTokenData" = NULL, github_token = NULL WHERE username = $1;',
+      [req.user.username],
+    );
+    res.json({ success: true });
+  } catch (error) {
+    log('GitHub key removal failed:', error.message);
+    res.status(500).json({ error: 'Could not remove saved GitHub key data.' });
+  }
+});
+
+// Prevent older clients from continuing to store GitHub tokens in plaintext.
+app.post('/api/user/github-token', authenticateToken, (req, res) => {
+  res.status(410).json({ error: 'Plaintext GitHub key saving is disabled. Update the GitHub app to use PIN-protected saving.' });
 });
 
 // The server never sees the PIN. It only checks that what it is asked to store
