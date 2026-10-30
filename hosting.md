@@ -64,8 +64,24 @@ Stop other writers before the initial copy, then configure every deployment to u
 the coordinator before letting it accept writes. Direct SQL edits and older app
 versions that bypass the coordinator are outside replication.
 
-The first launch copies Neon into an empty Layerbase database, including IDs and
-sequence positions. A nonempty Layerbase database is rejected rather than replaced.
+Neither provider is primary. On first launch, the app uses an available database
+as its baseline. For databases in the same replication group, it uses the newer
+checkpoint; otherwise it prefers a populated database, with no vendor preference.
+If both are empty, either can initialize the app. On subsequent launches it keeps
+the last active database when available and catches up the other before using it.
+
+For a manual migration, stop the app, restore your backup into Layerbase, then start
+the app after the restore finishes. Neon does not need to be available. A fresh
+coordinator can adopt restored data even when the backup includes old
+`_unreader_replica` metadata. It creates a new replication group for that baseline.
+When the other provider returns, an empty database receives the baseline; an
+already populated database must match the baseline before pending writes replay.
+Conflicting data is left intact and that provider stays out of service until you
+reconcile it or restore the same backup. No populated database is overwritten.
+Keep the existing journal for normal restarts; a deliberate migration to a new
+baseline needs its own persistent `DB_REPLICA_DIR`, with the previous directory
+preserved for recovery.
+
 The app records each transaction's row changes on durable disk before committing,
 then sends them to the other database. If a provider is unavailable or reaches its
 limits, the other catches up from this journal before serving requests. The

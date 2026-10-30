@@ -164,8 +164,8 @@ export function createDatabase({ env = process.env, log = console.log, createPoo
     `);
   }
 
-  async function installTriggers(client) {
-    await client.query(tables.map((table) => {
+  async function installTriggers(client, definitions = tables) {
+    await client.query(definitions.map((table) => {
       const name = quote(table.name);
       return `DROP TRIGGER IF EXISTS _unreader_capture ON ${name};
         CREATE TRIGGER _unreader_capture AFTER INSERT OR UPDATE OR DELETE ON ${name}
@@ -204,8 +204,6 @@ export function createDatabase({ env = process.env, log = console.log, createPoo
   }
 
   async function alignReplicaColumns(client) {
-    const checkpoint = await client.query('SELECT applied FROM _unreader_replica WHERE singleton;');
-    if (checkpoint.rowCount) return;
     for (const table of state.tables) {
       if (!table.columns) throw new Error('Source column metadata is required before initializing the replica.');
       const name = quote(table.name);
@@ -246,6 +244,26 @@ export function createDatabase({ env = process.env, log = console.log, createPoo
       if (!/^\d+$/.test(last_value)) throw new Error('Invalid sequence position in recovery journal.');
       return `SELECT setval('${name.replaceAll("'", "''")}', ${last_value}, ${is_called ? 'true' : 'false'});`;
     }).join('\n'));
+  }
+
+  async function acceptBaseline(client, record) {
+    await client.query(`LOCK TABLE ${tables.map((table) => quote(table.name)).join(', ')} IN SHARE MODE;`);
+    let populated = false;
+    for (const table of tables) {
+      const result = await client.query(`SELECT 1 FROM ${quote(table.name)} LIMIT 1;`);
+      if (result.rowCount) { populated = true; break; }
+    }
+    if (!populated) return false;
+    for (const table of tables) {
+      const actual = await snapshotTable(client, table, async () => {});
+      const expected = record.snapshot[table.name];
+      if (!expected || actual.count !== expected.count || actual.hash !== expected.hash)
+        throw new Error('Database differs from the initial baseline. Restore the same backup before joining replication; existing data was not overwritten.');
+    }
+    await restoreSequences(client, record.sequences);
+    await client.query(`INSERT INTO _unreader_replica (group_id, applied) VALUES ($1, $2)
+      ON CONFLICT (singleton) DO UPDATE SET group_id = EXCLUDED.group_id, applied = EXCLUDED.applied;`, [state.group, record.sequence]);
+    return true;
   }
 
   async function apply(client, record) {
@@ -314,23 +332,21 @@ export function createDatabase({ env = process.env, log = console.log, createPoo
       if (!provider.prepared) {
         await client.query(schema);
         await metadata(client);
-        if (provider.name === 'layerbase') await alignReplicaColumns(client);
         await installTriggers(client);
         provider.prepared = true;
       }
       await client.query('BEGIN');
       const result = await client.query('SELECT group_id, applied FROM _unreader_replica WHERE singleton;');
       let current = result.rows[0];
-      if (!current && provider.name === 'neon' && records.get(1)?.snapshot) {
-        await client.query(`LOCK TABLE ${tables.map((table) => quote(table.name)).join(', ')} IN SHARE MODE;`);
-        for (const table of tables) {
-          const actual = await snapshotTable(client, table, async () => {});
-          const expected = records.get(1).snapshot[table.name];
-          if (expected.count !== actual.count || expected.hash !== actual.hash)
-            throw new Error('Neon changed during an interrupted bootstrap; restore the recovery journal before continuing.');
+      const baseline = records.get(1);
+      if ((!current || current.group_id !== state.group) && baseline?.snapshot) {
+        if (await acceptBaseline(client, baseline)) {
+          current = { group_id: state.group, applied: baseline.sequence };
+        } else {
+          await alignReplicaColumns(client);
+          await client.query('DELETE FROM _unreader_replica WHERE singleton;');
+          current = null;
         }
-        await client.query('INSERT INTO _unreader_replica (group_id, applied) VALUES ($1, 1);', [state.group]);
-        current = { group_id: state.group, applied: 1 };
       }
       if (current && current.group_id !== state.group) throw new Error('Recovery journal does not match this database.');
       let applied = Number(current?.applied || 0);
@@ -356,7 +372,11 @@ export function createDatabase({ env = process.env, log = console.log, createPoo
     const candidates = active ? [active, ...providers.filter((provider) => provider !== active)] : providers;
     for (const provider of candidates) {
       if (await catchUp(provider)) {
-        if (active !== provider) log(`Database authority: ${provider.name}`);
+        if (active !== provider) {
+          log(`Using database: ${provider.name}`);
+          state.active = provider.name;
+          await saveFile(join(directory, 'state.json'), state);
+        }
         active = provider;
         return provider;
       }
@@ -420,61 +440,89 @@ export function createDatabase({ env = process.env, log = console.log, createPoo
       records.set(record.sequence, record);
     }
     if (state) state.sequence = Math.max(state.sequence, ...records.keys());
-    let initialized = false;
-    for (const provider of providers) {
+    const prepared = await Promise.all(providers.map(async (provider) => {
       let client;
       try {
         log(`Preparing ${provider.name} replication schema...`);
         client = await provider.pool.connect();
         await client.query(schema);
         await metadata(client);
-        tables = await readTables(client);
-        if (state && provider.name === 'neon' && state.tables.some((table) => !table.columns)) {
-          const checkpoint = await client.query('SELECT group_id FROM _unreader_replica WHERE singleton;');
-          if (checkpoint.rows[0]?.group_id !== state.group) throw new Error('Source does not match the recovery journal.');
-          state.tables = tables;
-          await saveFile(join(directory, 'state.json'), state);
-        }
-        if (state && provider.name === 'layerbase') await alignReplicaColumns(client);
-        await installTriggers(client);
+        const definitions = await readTables(client);
+        await installTriggers(client, definitions);
         provider.prepared = true;
-        if (!state) {
-          if (provider.name !== 'neon') throw new Error('First bootstrap requires Neon as the source.');
-          const existing = await client.query('SELECT 1 FROM _unreader_replica;');
-          if (existing.rowCount) throw new Error('Recovery journal is missing. Restore DB_REPLICA_DIR; do not bootstrap again.');
-          await client.query('BEGIN ISOLATION LEVEL REPEATABLE READ');
-          await client.query(`LOCK TABLE ${tables.map((table) => quote(table.name)).join(', ')} IN SHARE MODE;`);
-          log('Saving the initial Neon baseline...');
-          const snapshot = {};
-          for (const [tableIndex, table] of tables.entries()) {
-            const chunks = [];
-            const digest = await snapshotTable(client, table, async (rows) => {
-              if (!rows.length) return;
-              const file = `baseline-${tableIndex}-${chunks.length}.json`;
-              await saveFile(join(directory, file), rows);
-              chunks.push(file);
-            });
-            snapshot[table.name] = { chunks, ...digest };
-            log(`Baseline: ${table.name}, ${digest.count} rows`);
-          }
-          state = { group: randomUUID(), sequence: 1, tables };
-          const record = { sequence: 1, snapshot, sequences: await readSequences(client) };
-          await saveFile(join(directory, '1.json'), record);
-          records.set(1, record);
-          await saveFile(join(directory, 'state.json'), state);
-          await client.query('INSERT INTO _unreader_replica (group_id, applied) VALUES ($1, 1);', [state.group]);
-          await client.query('COMMIT');
-          provider.applied = 1;
-          log('Neon baseline saved to the durable recovery journal.');
-        }
-        initialized = true;
+        const checkpoint = await client.query('SELECT group_id, applied FROM _unreader_replica WHERE singleton;');
+        const populated = await client.query(`SELECT ${definitions.map((table) =>
+          `EXISTS (SELECT 1 FROM ${quote(table.name)} LIMIT 1)`
+        ).join(' OR ')} AS populated;`);
+        return { provider, definitions, checkpoint: checkpoint.rows[0], populated: populated.rows[0].populated };
       } catch (error) {
-        if (client) await client.query('ROLLBACK').catch(() => {});
         if (!unavailable(error)) throw error;
         failed(provider, error);
+        return null;
       } finally { if (client) client.release(); }
+    }));
+    const available = prepared.filter(Boolean);
+    if (!available.length) throw new Error('Could not initialize database recovery: neither database is available.');
+    if (!state) {
+      const group = available[0].checkpoint?.group_id;
+      const sameGroup = group && available.every((entry) => entry.checkpoint?.group_id === group);
+      const highest = sameGroup ? Math.max(...available.map((entry) => Number(entry.checkpoint.applied))) : null;
+      const current = available.filter((entry) => highest === null || Number(entry.checkpoint?.applied || 0) === highest);
+      const populated = current.filter((entry) => entry.populated);
+      const candidates = populated.length ? populated : current;
+      const source = candidates[Math.floor(Math.random() * candidates.length)];
+      tables = source.definitions;
+      const client = await source.provider.pool.connect();
+      try {
+        await client.query('BEGIN ISOLATION LEVEL REPEATABLE READ');
+        await client.query(`LOCK TABLE ${tables.map((table) => quote(table.name)).join(', ')} IN SHARE MODE;`);
+        log(`Saving the initial ${source.provider.name} baseline...`);
+        const snapshot = {};
+        for (const [tableIndex, table] of tables.entries()) {
+          const chunks = [];
+          const digest = await snapshotTable(client, table, async (rows) => {
+            if (!rows.length) return;
+            const file = `baseline-${tableIndex}-${chunks.length}.json`;
+            await saveFile(join(directory, file), rows);
+            chunks.push(file);
+          });
+          snapshot[table.name] = { chunks, ...digest };
+          log(`Baseline: ${table.name}, ${digest.count} rows`);
+        }
+        state = { group: randomUUID(), sequence: 1, tables, active: source.provider.name };
+        const record = { sequence: 1, snapshot, sequences: await readSequences(client) };
+        await saveFile(join(directory, '1.json'), record);
+        records.set(1, record);
+        await saveFile(join(directory, 'state.json'), state);
+        await client.query(`INSERT INTO _unreader_replica (group_id, applied) VALUES ($1, 1)
+          ON CONFLICT (singleton) DO UPDATE SET group_id = EXCLUDED.group_id, applied = EXCLUDED.applied;`, [state.group]);
+        await client.query('COMMIT');
+        source.provider.applied = 1;
+        active = source.provider;
+        log(`${source.provider.name} baseline saved to the durable recovery journal.`);
+      } catch (error) {
+        await client.query('ROLLBACK').catch(() => {});
+        throw error;
+      } finally { client.release(); }
+    } else {
+      if (state.tables.some((table) => !table.columns)) {
+        const source = available.find((entry) => entry.checkpoint?.group_id === state.group);
+        if (!source) throw new Error('No available database matches the recovery journal.');
+        state.tables = source.definitions;
+        await saveFile(join(directory, 'state.json'), state);
+      }
+      active = providers.find((provider) => provider.name === state.active);
+      if (!active) {
+        const matching = available.filter((entry) => entry.checkpoint?.group_id === state.group);
+        matching.sort((a, b) => Number(b.checkpoint.applied) - Number(a.checkpoint.applied));
+        const latest = matching.filter((entry) => entry.checkpoint.applied === matching[0]?.checkpoint.applied);
+        active = latest[Math.floor(Math.random() * latest.length)]?.provider;
+        if (active) {
+          state.active = active.name;
+          await saveFile(join(directory, 'state.json'), state);
+        }
+      }
     }
-    if (!initialized || !state) throw new Error('Could not initialize database recovery.');
     tables = state.tables;
     const provider = await selectProvider();
     const client = await provider.pool.connect();

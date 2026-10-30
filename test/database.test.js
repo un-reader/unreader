@@ -32,7 +32,7 @@ test('real PostgreSQL bootstrap, failover, recovery, restart and serverless tran
   const directory = await mkdtemp(join(tmpdir(), 'unreader-replica-'));
   const roots = [process.env.TEST_NEON_DB_URL, process.env.TEST_LB_DB_URL];
   const admins = roots.map((connectionString) => new Pool({ connectionString, connectionTimeoutMillis: 30000 }));
-  const urls = roots.map((connectionString) => { const url = new URL(connectionString); url.pathname = '/' + name; return url.href; });
+  const urls = roots.map((connectionString, index) => { const url = new URL(connectionString); url.pathname = '/' + name + '_' + index; return url.href; });
   const checks = urls.map((connectionString) => new Pool({ connectionString, connectionTimeoutMillis: 30000 }));
   const down = [false, false];
   let loseCommit = false;
@@ -84,7 +84,7 @@ test('real PostgreSQL bootstrap, failover, recovery, restart and serverless tran
     assert.deepEqual(results[0].rows, results[1].rows, table + ' converges');
   }
   try {
-    for (const admin of admins) await admin.query(`CREATE DATABASE ${name};`);
+    for (const [index, admin] of admins.entries()) await admin.query(`CREATE DATABASE ${name}_${index};`);
     await checks[0].query(schema);
     await checks[0].query("INSERT INTO users (username, password_hash, timeout_until) VALUES ('replica_seed', 'test', 9007199254740993); INSERT INTO profiles (username, bio) VALUES ('replica_seed', 'seed profile');");
     await checks[0].query("ALTER TABLE roles ALTER COLUMN class DROP NOT NULL; INSERT INTO roles (role, prefix, style, class) VALUES ('legacy_role', '', '', NULL);");
@@ -176,8 +176,104 @@ test('real PostgreSQL bootstrap, failover, recovery, restart and serverless tran
     if (server) await new Promise((resolve) => server.close(resolve));
     if (db) await db.end();
     for (const pool of checks) await pool.end();
-    for (const admin of admins) {
-      await admin.query(`DROP DATABASE IF EXISTS ${name} WITH (FORCE);`).catch((error) => t.diagnostic('Test database cleanup: ' + error.code));
+    for (const [index, admin] of admins.entries()) {
+      await admin.query(`DROP DATABASE IF EXISTS ${name}_${index} WITH (FORCE);`).catch((error) => t.diagnostic('Test database cleanup: ' + error.code));
+      await admin.end();
+    }
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('Layerbase restore starts with Neon over quota and joins a restored peer without overwriting data', { skip: !enabled, timeout: 600000 }, async (t) => {
+  const name = 'unreader_restore_test_' + randomBytes(6).toString('hex');
+  const roots = [process.env.TEST_NEON_DB_URL, process.env.TEST_LB_DB_URL];
+  const admins = roots.map((connectionString) => new Pool({ connectionString, connectionTimeoutMillis: 30000 }));
+  const urls = roots.map((connectionString, index) => {
+    const url = new URL(connectionString);
+    url.pathname = `/${name}_${index}`;
+    return url.href;
+  });
+  const checks = urls.map((connectionString) => new Pool({ connectionString, connectionTimeoutMillis: 30000 }));
+  const directory = await mkdtemp(join(tmpdir(), 'unreader-restore-'));
+  const down = [true, false];
+  let db;
+  const env = { NEON_DB_URL: urls[0], LB_DB_URL: urls[1], DB_REPLICA_DIR: directory, DB_RETRY_MS: '1000' };
+  function createPool(options) {
+    const index = urls.indexOf(options.connectionString);
+    const pool = new Pool(options);
+    const connect = pool.connect.bind(pool);
+    pool.connect = async () => {
+      if (down[index]) throw Object.assign(new Error('Your account or project has exceeded the quota.'), { code: '53000' });
+      return connect();
+    };
+    pool.query = async (...args) => {
+      const client = await pool.connect();
+      try { return await client.query(...args); } finally { client.release(); }
+    };
+    return pool;
+  }
+  const messages = [];
+  const makeDatabase = () => createDatabase({ env, createPool, log: (...args) => {
+    messages.push(args.join(' '));
+    t.diagnostic(args.join(' '));
+  } });
+  async function recovered() {
+    const deadline = Date.now() + 60000;
+    while (db.status().pending) {
+      assert.ok(Date.now() < deadline, 'Restored peer should catch up.');
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+  }
+  try {
+    for (const [index, admin] of admins.entries()) await admin.query(`CREATE DATABASE ${name}_${index};`);
+    for (const pool of checks) {
+      await pool.query(schema);
+      await pool.query(`INSERT INTO users (id, username, password_hash) VALUES (10, 'restored_user', 'backup_hash');
+        SELECT setval('users_id_seq', 10);
+        CREATE TABLE _unreader_replica (singleton BOOLEAN PRIMARY KEY DEFAULT true CHECK (singleton), group_id TEXT NOT NULL, applied BIGINT NOT NULL);
+        INSERT INTO _unreader_replica VALUES (true, 'metadata-from-manual-backup', 7);`);
+    }
+    db = makeDatabase();
+    await db.initialize();
+    assert.equal(db.status().active, 'layerbase');
+    assert.equal((await db.query("SELECT username FROM users WHERE id = 10;")).rows[0].username, 'restored_user');
+    await db.query("INSERT INTO users (username, password_hash) VALUES ('written_on_layerbase', 'hash');");
+    await db.end();
+    db = makeDatabase();
+    await db.initialize();
+    assert.equal(db.status().active, 'layerbase');
+    assert.equal((await db.query("SELECT count(*)::int AS count FROM users;")).rows[0].count, 2);
+    await checks[0].query("INSERT INTO users (id, username, password_hash) VALUES (90, 'peer_only_row', 'hash');");
+    down[0] = false;
+    const deadline = Date.now() + 60000;
+    while (!messages.some((message) => message.includes('differs from the initial baseline'))) {
+      assert.ok(Date.now() < deadline, 'Divergent restored data must be detected.');
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    assert.equal((await checks[0].query("SELECT username FROM users WHERE id = 90;")).rows[0].username, 'peer_only_row');
+    assert.equal(db.status().active, 'layerbase');
+    await checks[0].query("DELETE FROM users WHERE id = 90;");
+    await recovered();
+    const users = await Promise.all(checks.map(async (pool) => (await pool.query('SELECT id, username FROM users ORDER BY id;')).rows));
+    assert.deepEqual(users[0], users[1]);
+    const checkpoints = await Promise.all(checks.map(async (pool) => (await pool.query('SELECT group_id, applied FROM _unreader_replica;')).rows));
+    assert.deepEqual(checkpoints[0], checkpoints[1]);
+    t.diagnostic('Neon 53000 at first startup: Layerbase restored data served, restart succeeded, and Neon caught up on recovery.');
+
+    await db.end();
+    // Keep the recovered provider active when both databases become available again.
+    db = makeDatabase();
+    await db.initialize();
+    assert.equal(db.status().active, 'layerbase');
+    down[1] = true;
+    assert.equal((await db.query('SELECT count(*)::int AS count FROM users;')).rows[0].count, 2);
+    assert.equal(db.status().active, 'neon');
+    down[1] = false;
+  } finally {
+    if (db) await db.end();
+    for (const pool of checks) await pool.end();
+    for (const [index, admin] of admins.entries()) {
+      await admin.query(`DROP DATABASE IF EXISTS ${name}_${index} WITH (FORCE);`).catch((error) => t.diagnostic('Test database cleanup: ' + error.code));
       await admin.end();
     }
     await rm(directory, { recursive: true, force: true });
