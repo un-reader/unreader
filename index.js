@@ -963,25 +963,76 @@ app.post('/api/pets', authenticateToken, async (req, res) => {
   }
 });
 
-// Endpoint to save gh key on un-reader acc
-app.post('/api/user/github-token', authenticateToken, async (req, res) => {
+function isValidGitHubTokenVault(value) {
+  return (
+    value &&
+    typeof value === 'object' &&
+    value.version === 2 &&
+    value.context === 'unreader-github-token-pin-v2' &&
+    value.kdf === 'PBKDF2-SHA-256' &&
+    value.iterations === 600000 &&
+    value.cipher === 'AES-GCM-256' &&
+    /^[A-Za-z0-9+/]{20,24}={0,2}$/.test(value.salt || '') &&
+    /^[A-Za-z0-9+/]{16}={0,2}$/.test(value.iv || '') &&
+    /^[A-Za-z0-9+/]+={0,2}$/.test(value.ciphertext || '') &&
+    value.ciphertext.length <= 12000
+  );
+}
+
+app.get('/api/user/github-token-vault', authenticateToken, async (req, res) => {
   try {
-    const { github_token } = req.body;
-    if (!github_token) {
-      return res.status(400).json({ error: 'Missing github_token' });
+    const result = await db.query(
+      'SELECT "GitHubTokenData", github_token FROM users WHERE username = $1;',
+      [req.user.username],
+    );
+    let data = null;
+    if (result.rows[0] && result.rows[0].GitHubTokenData) {
+      try {
+        data = JSON.parse(result.rows[0].GitHubTokenData);
+      } catch (error) {
+        return res.status(500).json({ error: 'Saved GitHub key data is invalid.' });
+      }
     }
-
-    await db.query('UPDATE users SET github_token = $1 WHERE username = $2;', [
-      sanitize(github_token),
-      req.user.username,
-    ]);
-
-    log(`GitHub token updated for user: ${req.user.username}`);
-    res.json({ success: true });
-  } catch (err) {
-    log('Failed to save GitHub token:', err.message);
-    res.status(500).json({ error: 'Server error: ' + err.message });
+    res.json({ data, legacyToken: result.rows[0]?.github_token || null });
+  } catch (error) {
+    log('GitHub key lookup failed:', error.message);
+    res.status(500).json({ error: 'Could not load saved GitHub key data.' });
   }
+});
+
+app.put('/api/user/github-token-vault', authenticateToken, async (req, res) => {
+  const data = req.body && req.body.data;
+  if (!isValidGitHubTokenVault(data))
+    return res.status(400).json({ error: 'Encrypted GitHub key data is invalid.' });
+  try {
+    // A successful encrypted save also removes the old plaintext account copy.
+    await db.query(
+      'UPDATE users SET "GitHubTokenData" = $1, github_token = NULL WHERE username = $2;',
+      [JSON.stringify(data), req.user.username],
+    );
+    res.json({ success: true });
+  } catch (error) {
+    log('GitHub key save failed:', error.message);
+    res.status(500).json({ error: 'Could not save encrypted GitHub key data.' });
+  }
+});
+
+app.delete('/api/user/github-token-vault', authenticateToken, async (req, res) => {
+  try {
+    await db.query(
+      'UPDATE users SET "GitHubTokenData" = NULL, github_token = NULL WHERE username = $1;',
+      [req.user.username],
+    );
+    res.json({ success: true });
+  } catch (error) {
+    log('GitHub key removal failed:', error.message);
+    res.status(500).json({ error: 'Could not remove saved GitHub key data.' });
+  }
+});
+
+// Prevent older clients from continuing to store GitHub tokens in plaintext.
+app.post('/api/user/github-token', authenticateToken, (req, res) => {
+  res.status(410).json({ error: 'Plaintext GitHub key saving is disabled. Update the GitHub app to use PIN-protected saving.' });
 });
 
 // The server never sees the PIN. It only checks that what it is asked to store
@@ -1755,7 +1806,7 @@ app.get('/api/admin/removal-proposals', authenticateToken, async (req, res) => {
       try {
         electorate = JSON.parse(row.eligible_voters || '{}');
         if (Array.isArray(electorate)) electorate = { admins: electorate, moderators: [] };
-      } catch {}
+      } catch { }
       const admins = (electorate.admins || []).filter((name) => activeAdmins.has(String(name).toLowerCase()));
       const moderators = (electorate.moderators || []).filter((name) => activeModerators.has(String(name).toLowerCase()));
       const eligibleSet = new Set(admins.concat(moderators).map((name) => String(name).toLowerCase()));
@@ -1854,7 +1905,7 @@ app.post('/api/admin/removal-proposals', authenticateToken, async (req, res) => 
     await client.query('COMMIT');
     res.json({ success: true, proposal_id: proposalId });
   } catch (error) {
-    if (client) await client.query('ROLLBACK').catch(() => {});
+    if (client) await client.query('ROLLBACK').catch(() => { });
     if (error.code === '23505')
       return res.status(409).json({ error: 'An open removal vote already exists for that admin.' });
     log('Admin removal proposal creation failed:', error.message);
@@ -1894,7 +1945,7 @@ app.post('/api/admin/removal-proposals/:id/vote', authenticateToken, async (req,
     try {
       electorate = JSON.parse(proposal.eligible_voters || '{}');
       if (Array.isArray(electorate)) electorate = { admins: electorate, moderators: [] };
-    } catch {}
+    } catch { }
     const voter = req.user.username;
     const targetResult = await client.query(
       `SELECT u.username, u.roles FROM users u
@@ -1958,7 +2009,7 @@ app.post('/api/admin/removal-proposals/:id/vote', authenticateToken, async (req,
     let status = 'open';
     if (adminPass || moderatorPass) {
       let roles = [];
-      try { roles = JSON.parse(targetResult.rows[0].roles || '[]'); } catch {}
+      try { roles = JSON.parse(targetResult.rows[0].roles || '[]'); } catch { }
       if (!Array.isArray(roles)) roles = [];
       roles = roles.filter((role) => role !== 'admin');
       await client.query(
@@ -1970,7 +2021,7 @@ app.post('/api/admin/removal-proposals/:id/vote', authenticateToken, async (req,
       const adminPossible = yesAdmins + electorate.admins.length - adminVotes.length >= thresholdAdmins;
       const moderatorPossible = yesModerators + electorate.moderators.length - moderatorVotes.length >= thresholdModerators;
       if ((!adminPossible || electorate.admins.length === 0) &&
-          (!moderatorPossible || electorate.moderators.length === 0)) status = 'rejected';
+        (!moderatorPossible || electorate.moderators.length === 0)) status = 'rejected';
     }
     if (status !== 'open') {
       await client.query(
@@ -1999,7 +2050,7 @@ app.post('/api/admin/removal-proposals/:id/vote', authenticateToken, async (req,
     }
     res.json({ success: true, status, yes_admins: yesAdmins, yes_moderators: yesModerators, threshold_admins: thresholdAdmins, threshold_moderators: thresholdModerators });
   } catch (error) {
-    if (client) await client.query('ROLLBACK').catch(() => {});
+    if (client) await client.query('ROLLBACK').catch(() => { });
     log('Admin removal vote failed:', error.message);
     res.status(503).json({ error: 'Could not record the admin removal vote.' });
   } finally {
@@ -3057,8 +3108,8 @@ const isMainModule =
   !!process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
 const server = isMainModule
   ? app.listen(process.env.PORT || 10000, '0.0.0.0', () =>
-      log(`Node strictly bound to port: ${process.env.PORT || 10000}`),
-    )
+    log(`Node strictly bound to port: ${process.env.PORT || 10000}`),
+  )
   : null;
 const wss = server
   ? new WebSocketServer({ server })
