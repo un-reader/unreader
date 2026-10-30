@@ -253,3 +253,5 @@ idea.txt
 #We don't wanna leak ideas, do we?
 .vercel
 .env*
+
+.database-replica/
