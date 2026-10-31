@@ -365,6 +365,38 @@
     </div>
 
     <div class="setting-group">
+      <div class="setting-title">Chat AI</div>
+      <div class="setting-item">
+        <div>
+          <div class="setting-label">@system provider</div>
+          <div class="setting-desc">Choose Qwen, the server Cloudflare model, or your own provider key.</div>
+        </div>
+        <select id="system-ai-provider" class="kindle-input" style="width:auto; min-width:190px;">
+          <option value="qwen">Qwen (managed)</option>
+          <option value="cloudflare">Cloudflare Workers AI</option>
+          <option value="groq">My Groq key</option>
+          <option value="openai">My OpenAI key</option>
+          <option value="openrouter">My OpenRouter key</option>
+          <option value="custom">My OpenAI-compatible key</option>
+        </select>
+      </div>
+      <div id="system-ai-key-settings" style="display:none; padding:8px 0;">
+        <label for="system-ai-key" class="setting-label">Personal API key</label>
+        <input id="system-ai-key" class="kindle-input" type="password" autocomplete="off" placeholder="Paste your provider key" />
+        <label for="system-ai-model" class="setting-label">Model ID</label>
+        <input id="system-ai-model" class="kindle-input" type="text" autocomplete="off" placeholder="Provider model ID" />
+        <div id="system-ai-endpoint-wrap" style="display:none;">
+          <label for="system-ai-endpoint" class="setting-label">OpenAI-compatible endpoint</label>
+          <input id="system-ai-endpoint" class="kindle-input" type="url" autocomplete="off" placeholder="https://provider.example/v1/chat/completions" />
+        </div>
+        <button id="system-ai-save" class="retro-btn">SAVE AI SETTINGS</button>
+        <button id="system-ai-clear" class="retro-btn">CLEAR PERSONAL KEY</button>
+        <div class="setting-desc">Your personal key is saved in this browser only and sent directly to its provider.</div>
+      </div>
+      <div id="system-ai-status" class="setting-desc" aria-live="polite"></div>
+    </div>
+
+    <div class="setting-group">
       <div class="setting-title">Accessibility</div>
       <div class="setting-item">
         <div>
@@ -565,6 +597,62 @@
       setNekoEnabled(enabled);
       updateNekoToggle();
     };
+
+    const aiProvider = document.getElementById('system-ai-provider');
+    const aiKeySettings = document.getElementById('system-ai-key-settings');
+    const aiModel = document.getElementById('system-ai-model');
+    const aiEndpointWrap = document.getElementById('system-ai-endpoint-wrap');
+    const aiConfigKey = 'unreader-system-ai-config';
+    const aiDefaults = {
+      groq: { model: 'qwen/qwen3.8-27b' },
+      openai: { model: 'gpt-4o-mini' },
+      openrouter: { model: 'openai/gpt-oss-120b' },
+      custom: { model: '' }
+    };
+    let aiConfig = {};
+    try { aiConfig = JSON.parse(localStorage.getItem(aiConfigKey) || '{}'); } catch (e) {}
+    if (!aiConfig || typeof aiConfig !== 'object') aiConfig = {};
+    if (['qwen', 'cloudflare', 'groq', 'openai', 'openrouter', 'custom'].includes(aiConfig.provider)) aiProvider.value = aiConfig.provider;
+    document.getElementById('system-ai-key').value = aiConfig.key || '';
+    aiModel.value = aiConfig.model || (aiDefaults[aiProvider.value] || {}).model || '';
+    document.getElementById('system-ai-endpoint').value = aiConfig.endpoint || '';
+    let lastAIProvider = aiProvider.value;
+    function updateAIProviderFields() {
+      const personal = ['groq', 'openai', 'openrouter', 'custom'].includes(aiProvider.value);
+      aiKeySettings.style.display = personal ? 'block' : 'none';
+      aiEndpointWrap.style.display = aiProvider.value === 'custom' ? 'block' : 'none';
+      if (personal && aiProvider.value !== lastAIProvider) aiModel.value = (aiDefaults[aiProvider.value] || {}).model || '';
+      lastAIProvider = aiProvider.value;
+      if (!personal) {
+        aiConfig.provider = aiProvider.value;
+        localStorage.setItem(aiConfigKey, JSON.stringify(aiConfig));
+      }
+      document.getElementById('system-ai-status').textContent = aiConfig.key && personal ? 'Personal provider is enabled on this browser.' : '';
+    }
+    aiProvider.onchange = updateAIProviderFields;
+    document.getElementById('system-ai-save').onclick = function () {
+      const model = aiModel.value.trim();
+      const key = document.getElementById('system-ai-key').value.trim();
+      const endpoint = document.getElementById('system-ai-endpoint').value.trim();
+      if (!key || !model || (aiProvider.value === 'custom' && !/^https:\/\//i.test(endpoint))) {
+        document.getElementById('system-ai-status').textContent = 'Enter a key and model; custom endpoints must use HTTPS.';
+        return;
+      }
+      aiConfig = { provider: aiProvider.value, key: key, model: model, endpoint: endpoint };
+      localStorage.setItem(aiConfigKey, JSON.stringify(aiConfig));
+      document.getElementById('system-ai-status').textContent = 'Personal provider settings saved in this browser.';
+    };
+    document.getElementById('system-ai-clear').onclick = function () {
+      localStorage.removeItem(aiConfigKey);
+      document.getElementById('system-ai-key').value = '';
+      aiConfig = {};
+      aiProvider.value = 'qwen';
+      aiModel.value = '';
+      document.getElementById('system-ai-endpoint').value = '';
+      document.getElementById('system-ai-status').textContent = 'Personal key removed from this browser.';
+      updateAIProviderFields();
+    };
+    updateAIProviderFields();
 
     document.getElementById('font-toggle').onclick = () => {
       document.body.classList.toggle('dyslexic-font');

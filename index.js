@@ -254,6 +254,58 @@ app.get('/portal-2d-editor.html', (req, res) => {
 
 app.use(express.static('./static/'));
 
+const cloudflareAiUsage = new Map();
+app.post('/api/ai/cloudflare', authenticateToken, async (req, res) => {
+  const accountId = process.env.CLOUDFLARE_ACCOUNT_ID;
+  const apiToken = process.env.CLOUDFLARE_API_TOKEN;
+  if (!accountId || !apiToken)
+    return res.status(503).json({ error: 'Cloudflare AI is not configured on the server.' });
+  if (!/^[a-f0-9]{32}$/i.test(accountId))
+    return res.status(503).json({ error: 'Cloudflare account configuration is invalid.' });
+  const messages = req.body?.messages;
+  if (!Array.isArray(messages) || !messages.length || messages.length > 42 || messages.some((message) =>
+    !message || !['system', 'user', 'assistant'].includes(message.role) ||
+    typeof message.content !== 'string' || message.content.length > 20000
+  )) return res.status(400).json({ error: 'Invalid AI messages.' });
+  const now = Date.now();
+  const usage = cloudflareAiUsage.get(req.user.username);
+  if (usage && now - usage.startedAt < 60000 && usage.count >= 10)
+    return res.status(429).json({ error: 'Cloudflare AI limit reached. Try again in a minute.' });
+  if (!usage || now - usage.startedAt >= 60000)
+    cloudflareAiUsage.set(req.user.username, { startedAt: now, count: 1 });
+  else usage.count++;
+
+  try {
+    const response = await fetch(
+      `https://api.cloudflare.com/client/v4/accounts/${accountId}/ai/v1/chat/completions`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${apiToken}`,
+          'Content-Type': 'application/json',
+          'cf-aig-gateway-id': process.env.CLOUDFLARE_AI_GATEWAY_ID || 'default',
+        },
+        body: JSON.stringify({
+          model: '@cf/qwen/qwen3.8-27b',
+          messages,
+          max_tokens: 4096,
+          temperature: 1,
+        }),
+        signal: AbortSignal.timeout(60000),
+      },
+    );
+    const data = await response.json().catch(() => null);
+    if (!response.ok) {
+      log('Cloudflare AI request failed with status:', response.status);
+      return res.status(502).json({ error: 'Cloudflare AI request failed.' });
+    }
+    res.json(data);
+  } catch (err) {
+    log('Cloudflare AI request failed:', err.name || 'request error');
+    res.status(502).json({ error: 'Cloudflare AI is temporarily unavailable.' });
+  }
+});
+
 function requestChangelogPage(page, perPage) {
   const key = `${page}:${perPage}`;
   let request = changelogRequests.get(key);

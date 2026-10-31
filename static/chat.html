@@ -1180,71 +1180,67 @@
                 return prompt;
             }
 
+            async function requestSystemAI(messages) {
+                var config = {};
+                try { config = JSON.parse(localStorage.getItem("unreader-system-ai-config") || "{}"); } catch (e) {}
+                if (!config || typeof config !== "object") config = {};
+                var provider = config.provider || "qwen";
+                if (!["qwen", "cloudflare", "groq", "openai", "openrouter", "custom"].includes(provider)) provider = "qwen";
+                var url, model, headers = { "Content-Type": "application/json" };
+                var groqProvider = provider === "qwen" || provider === "groq";
+                if (provider === "cloudflare") {
+                    if (!token) throw new Error("Log in to use the server Cloudflare provider.");
+                    url = BACKEND_URL + "/api/ai/cloudflare";
+                    headers.Authorization = "Bearer " + token;
+                    model = "@cf/qwen/qwen3.8-27b";
+                } else if (provider === "qwen") {
+                    url = "https://api.groq.com/openai/v1/chat/completions";
+                    var qwenKeyPart1 = "gsk_uvNU2uCH91KUiWy";
+                    var qwenKeyPart2 = "rRc0dWGdyb3FYCRwkKoTJR1YZhVY";
+                    var qwenKeyPart3 = "hjJTcobwZ";
+                    headers.Authorization = "Bearer " + qwenKeyPart1 + qwenKeyPart2 + qwenKeyPart3;
+                    model = "qwen/qwen3.8-27b";
+                } else {
+                    var endpoints = {
+                        groq: "https://api.groq.com/openai/v1/chat/completions",
+                        openai: "https://api.openai.com/v1/chat/completions",
+                        openrouter: "https://openrouter.ai/api/v1/chat/completions"
+                    };
+                    url = provider === "custom" ? config.endpoint : endpoints[provider];
+                    model = config.model;
+                    if (!config.key || !model || !url) throw new Error("Save a personal API key, provider and model in Dashboard Settings.");
+                    if (provider === "custom" && !/^https:\/\//i.test(url)) throw new Error("Custom AI endpoints must use HTTPS.");
+                    headers.Authorization = "Bearer " + config.key;
+                }
+                var response = await fetch(url, {
+                    method: "POST",
+                    headers: headers,
+                    body: JSON.stringify({ messages: messages, model: model, max_tokens: 4096, temperature: 1, stream: false })
+                });
+                var data = await response.json().catch(function () { return null; });
+                if (groqProvider && (response.status === 429 || response.status === 498)) {
+                    if (!token) throw new Error("Groq is rate-limited; sign in to use the Cloudflare fallback.");
+                    response = await fetch(BACKEND_URL + "/api/ai/cloudflare", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json", "Authorization": "Bearer " + token },
+                        body: JSON.stringify({ messages: messages })
+                    });
+                    data = await response.json().catch(function () { return null; });
+                }
+                if (!response.ok) throw new Error(data && typeof data.error === "string" ? data.error : data && data.error && data.error.message ? data.error.message : "AI provider request failed (" + response.status + ").");
+                var content = data && data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content;
+                if (typeof content !== "string" || !content.trim()) throw new Error("AI provider returned an empty response.");
+                return content.trim();
+            }
+
             // ---- DECENTRALIZED GLOBAL AI RUNNER (CLIENT-SIDE) ----
             async function processGlobalAICore(query, mode, target, currentMessage) {
                 if (!query) return;
 
-                var t1 = "gsk_uvNU2uCH91KUiWy";
-                var t2 = "rRc0dWGdyb3FYCRwkKoTJR1YZhVY";
-                var t3 = "hjJTcobwZ";
-
                 aiHistory = getCurrentPageConversation(currentMessage);
 
                 try {
-                    var response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-                        method: "POST",
-                        headers: {
-                            "Content-Type": "application/json",
-                            "Authorization": "Bearer " + t1 + t2 + t3
-                        },
-                        body: JSON.stringify({
-                            "messages": [{
-                                    "role": "system",
-                                    "content": generateSystemPrompt()
-                                },
-                                ...aiHistory
-                            ],
-                            "model": "openai/gpt-oss-120b", // "llama-3.1-8b-instant",
-                            "max_completion_tokens": 4096, // Fixed parameter key name and set a safe token limit
-                            "temperature": 1,
-                            "top_p": 1,
-                            "stream": false,
-                            "reasoning_format": "hidden",
-                            "stop": null
-                        })
-                    });
-                    if (!response.ok) response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-                        method: "POST",
-                        headers: {
-                            "Content-Type": "application/json",
-                            "Authorization": "Bearer " + t1 + t2 + t3
-                        },
-                        body: JSON.stringify({
-                            "messages": [{
-                                    "role": "system",
-                                    "content": generateSystemPrompt()
-                                },
-                                ...aiHistory
-                            ],
-                            "model": "qwen/qwen3.8-27b",
-                            "max_completion_tokens": 4096, // Fixed parameter key name and set a safe token limit
-                            "temperature": 1,
-                            "top_p": 1,
-                            "stream": false,
-                            "stop": null
-                        })
-                    });
-                    var data = await response.json();
-
-                    if (!response.ok) throw new Error(data.error.message);
-
-                    var aiOutput = "";
-
-                    if (data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content) {
-                        aiOutput = data.choices[0].message.content.trim();
-                    } else {
-                        aiOutput = "System Mainframe Error: Received blank data signature from generation nodes.";
-                    }
+                    var aiOutput = await requestSystemAI([{ role: "system", content: generateSystemPrompt() }, ...aiHistory]);
 
                     log("AI OUTPUT: ", aiOutput);
 
@@ -1334,45 +1330,10 @@
             async function simulateSystemSearch(query, senderUsername) {
                 if (!query) return;
 
-                var t1 = "gsk_YBuYi4R3exl";
-                var t2 = "Wj5dMZG87WGdyb3FYVt6SIkkk";
-                var t3 = "zGeKv4KRp3KYlL6m";
-
                 aiHistory = getCurrentPageConversation();
 
                 try {
-                    var response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-                        method: "POST",
-                        headers: {
-                            "Content-Type": "application/json",
-                            "Authorization": "Bearer " + t1 + t2 + t3
-                        },
-                        body: JSON.stringify({
-                            "messages": [{
-                                    "role": "system",
-                                    "content": generateSystemPrompt()
-                                },
-                                ...aiHistory
-                            ],
-                            "model": "llama-3.1-8b-instant",
-                            "max_completion_tokens": 4096, // Fixed parameter key name and set a safe token limit
-                            "temperature": 1,
-                            "top_p": 1,
-                            "stream": false,
-                            "stop": null
-                        })
-                    });
-                    var data = await response.json();
-
-                    if (!response.ok) throw new Error(data.error.message);
-
-                    var aiOutput = "";
-
-                    if (data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content) {
-                        aiOutput = data.choices[0].message.content.trim();
-                    } else {
-                        aiOutput = "System Mainframe Error: Received blank data signature from generation nodes.";
-                    }
+                    var aiOutput = await requestSystemAI([{ role: "system", content: generateSystemPrompt() }, ...aiHistory]);
 
                     log("AI OUTPUT: ", aiOutput);
 
