@@ -33,6 +33,13 @@
     .card-actions .paper-btn { font-size: 10px; padding: 4px 8px; }
     .card-actions .paper-btn + .paper-btn { margin-left: 6px; }
     .card-meta { font-size: 9px; color: #777; font-family: monospace; }
+    .suggestion-comments { margin-top: 10px; border-top: 1px dashed #888; padding-top: 8px; }
+    .suggestion-comments-title { font-size: 11px; font-weight: bold; margin-bottom: 6px; }
+    .suggestion-comment { font-size: 12px; padding: 5px 0; border-bottom: 1px dotted #bbb; }
+    .suggestion-comment-head { color: #555; font-size: 10px; font-weight: bold; margin-bottom: 3px; }
+    .suggestion-comment-body { white-space: pre-wrap; overflow-wrap: anywhere; }
+    .suggestion-comment-input { min-height: 48px !important; margin: 6px 0 !important; }
+    .suggestion-comment-status { font-size: 11px; margin-left: 6px; }
 
     @media (max-width: 480px) {
       .form-box { margin: 8px; padding: 10px; }
@@ -228,6 +235,18 @@
       html += '<div class="card-desc">' + escapeHtml(desc) + '</div>';
       html += '<div class="card-meta">#' + post.id + '</div>';
 
+      var comments = Array.isArray(post.comments) ? post.comments : [];
+      html += '<div class="suggestion-comments"><div class="suggestion-comments-title">COMMENTS (' + comments.length + ')</div>';
+      for (var c = 0; c < comments.length; c++) {
+        var comment = comments[c];
+        var commentDate = comment.created_at ? new Date(Number(comment.created_at)).toLocaleString() : "";
+        html += '<div class="suggestion-comment"><div class="suggestion-comment-head">@' + escapeHtml(comment.username || "anonymous") + (commentDate ? ' &bull; ' + escapeHtml(commentDate) : '') + '</div><div class="suggestion-comment-body">' + escapeHtml(comment.content) + '</div></div>';
+      }
+      if (token) {
+        html += '<textarea class="kindle-input paper-input suggestion-comment-input" maxlength="2000" aria-label="Comment on suggestion #' + post.id + '" placeholder="Write a comment..."></textarea><button class="paper-btn suggestion-comment-submit">POST COMMENT</button><span class="suggestion-comment-status" aria-live="polite"></span>';
+      }
+      html += '</div>';
+
       var actions = [];
       if (viewer.isStaff) {
         actions.push('<button class="paper-btn" onclick="tagSuggestion(' + post.id + ')">SET STATUS</button>');
@@ -249,7 +268,28 @@
 
       card.innerHTML = html;
       card.querySelector('.card-header > div').prepend(createProfilePicture(post.image_data));
+      var commentButton = card.querySelector('.suggestion-comment-submit');
+      if (commentButton) {
+        commentButton.onclick = function () { postSuggestionComment(post.id, card); };
+      }
       return card;
+    }
+
+    async function postSuggestionComment(id, card) {
+      var input = card.querySelector('.suggestion-comment-input');
+      var status = card.querySelector('.suggestion-comment-status');
+      var button = card.querySelector('.suggestion-comment-submit');
+      var content = input.value.trim();
+      if (!content) { status.textContent = 'Enter a comment first.'; return; }
+      button.disabled = true;
+      status.textContent = 'Posting...';
+      try {
+        await api('POST', '/api/suggestions/' + id + '/comments', { content: content });
+        loadHistory();
+      } catch (err) {
+        status.textContent = 'Failed: ' + err.message;
+        button.disabled = false;
+      }
     }
 
     async function tagSuggestion(id) {
