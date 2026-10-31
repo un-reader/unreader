@@ -151,6 +151,15 @@ CREATE TABLE IF NOT EXISTS suggestions (
   admin_filter TEXT,
   completion BOOLEAN
 );
+CREATE TABLE IF NOT EXISTS suggestion_comments (
+  id SERIAL PRIMARY KEY,
+  suggestion_id INTEGER NOT NULL REFERENCES suggestions(id) ON DELETE CASCADE,
+  username TEXT NOT NULL,
+  content TEXT NOT NULL,
+  created_at BIGINT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS suggestion_comments_suggestion_idx
+  ON suggestion_comments (suggestion_id, id ASC);
 
 CREATE TABLE IF NOT EXISTS doodle_scores (
   username TEXT PRIMARY KEY REFERENCES users(username) ON DELETE CASCADE,
