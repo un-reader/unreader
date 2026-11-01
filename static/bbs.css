@@ -240,7 +240,7 @@
 }
 
 .admin-msg {
-  background: black !important;
+  background: black;
   color: white !important;
   border: 3px solid black !important;
   box-shadow: 4px 4px 0px #0000004a !important;
