@@ -1,0 +1,485 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Mail — Un-Reader</title>
+  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="bbs.css">
+  <link rel="shortcut icon" href="favicon.ico" type="image/x-icon">
+  <script src="common.js"></script>
+  <style>
+    * { box-sizing: border-box; }
+    html, body { overflow: auto; }
+    body { min-width: 720px; align-items: flex-start; justify-content: flex-start; }
+    .window { width: 100%; height: 100vh; min-width: 720px; min-height: 520px; margin: 0; flex: 0 0 auto; }
+    .title-bar { flex-shrink: 0; }
+    #back-btn { text-decoration: none; color: var(--text-color); }
+    #title-controls { position: absolute; right: 10px; z-index: 2; display: flex; gap: 6px; }
+    main { flex: 1; min-height: 0; width: 100%; margin: 0; padding: 8px; overflow: hidden; display: flex; flex-direction: column; }
+    button, input, select { min-height: 40px; border: var(--border); border-radius: 0; background: var(--bg-color); color: var(--text-color); padding: 8px; font: inherit; }
+    button { font-weight: bold; cursor: pointer; }
+    button.paper-btn { box-shadow: 2px 2px 0 var(--text-color); }
+    #connection { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+    #connection label { display: grid; gap: 4px; font-size: 13px; font-weight: bold; }
+    #connection input, #connection select { width: 100%; }
+    #connection .wide { grid-column: span 2; }
+    #provider-note { grid-column: 1 / -1; margin: 0; }
+    #connection .actions { display: flex; align-items: end; gap: 8px; }
+    #credential-vault { grid-column: 1 / -1; min-width: 0; border: var(--border); padding: 8px; }
+    #credential-vault legend { font-weight: bold; }
+    #connection #credential-vault .save-option { display: flex; align-items: center; gap: 8px; margin: 4px 0 8px; }
+    #credential-vault input[type="checkbox"] { flex: 0 0 auto; width: 18px; height: 18px; min-height: 0; margin: 0; }
+    #credential-vault > .hint { margin: 2px 0 8px; }
+    #vault-pin-confirm-row[hidden] { display: none !important; }
+    .vault-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; align-items: end; }
+    .vault-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+    #vault-status { min-height: 0; margin: 6px 0 0; font-size: 12px; }
+    #status { min-height: 24px; margin: 10px 0; }
+    #mail-error { flex: 0 0 auto; max-height: 25vh; overflow: auto; margin: 0 0 8px; padding: 8px; border: var(--border); background: var(--bg-color); box-shadow: 2px 2px 0 var(--text-color); }
+    #mail-error[hidden] { display: none; }
+    #mail-error header { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+    #mail-error pre { margin: 6px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
+    #layout { flex: 1; min-width: 0; min-height: 0; display: grid; grid-template-columns: 40% minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); gap: 0; overflow: hidden; border: var(--border); background: var(--bg-color); }
+    #message-list, #message-view { min-width: 0; min-height: 0; padding: 10px; background: var(--bg-color); color: var(--text-color); }
+    #message-list { border-right: var(--border); }
+    #message-list { overflow: auto; }
+    #message-view { overflow-y: auto; }
+    .mail-row { display: block; width: 100%; text-align: left; margin-bottom: 8px; overflow-wrap: anywhere; white-space: normal; }
+    .mail-row small { display: block; margin-top: 5px; font-weight: normal; }
+    #message-body { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.45; }
+    #message-body.html-message { white-space: normal; }
+    #message-body img, #message-body table { max-width: 100%; }
+    #message-body img { height: auto; }
+    #message-body pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+    #message-meta { color: #444; font-size: 13px; overflow-wrap: anywhere; }
+    body.dark-mode #message-meta { color: #bbb; }
+    .hint { font-size: 13px; line-height: 1.4; }
+    #connection-overlay { display: none; position: fixed; inset: 0; z-index: 20; padding: 12px; background: rgba(0,0,0,.45); align-items: center; justify-content: center; }
+    #connection-overlay.open { display: flex; }
+    #help-overlay { display: none; position: fixed; inset: 0; z-index: 21; padding: 12px; background: rgba(0,0,0,.45); align-items: center; justify-content: center; }
+    #help-overlay.open { display: flex; }
+    #connection-panel { width: min(760px, 100%); max-height: 100%; overflow: auto; padding: 12px; border: var(--border); background: var(--bg-color); box-shadow: 4px 4px 0 var(--text-color); }
+    #connection-panel header, #help-panel header { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+    #help-panel { width: min(760px, 100%); max-height: 100%; overflow: auto; padding: 12px; border: var(--border); background: var(--bg-color); box-shadow: 4px 4px 0 var(--text-color); line-height: 1.45; }
+    #help-panel h3 { margin-bottom: 4px; }
+    #help-panel p { margin-top: 4px; }
+    #connection { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    @media (max-width: 900px) { #connection { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+    @media (max-width: 720px) { #connection { grid-template-columns: 1fr; } #connection .wide { grid-column: auto; } .vault-fields { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+  <div class="window">
+  <header class="title-bar">
+    <div class="title-stripes" aria-hidden="true"></div>
+    <a id="back-btn" class="paper-btn" href="index.html">◀ HOME</a>
+    <div class="title-text">MAIL CLIENT</div>
+    <div id="title-controls"><button id="help" class="paper-btn" type="button" aria-haspopup="dialog" aria-controls="help-overlay">HELP</button><button id="settings" class="paper-btn" type="button">SETTINGS</button><button id="clear" class="paper-btn" type="button">CLEAR</button></div>
+  </header>
+  <main>
+    <div id="status" role="status" aria-live="polite">Not connected</div>
+    <section id="mail-error" hidden role="alert" aria-live="assertive"><header><strong>MAIL SERVER RESPONSE</strong><span><button id="error-help" class="paper-btn" type="button">HELP</button> <button id="dismiss-mail-error" class="paper-btn" type="button">CLOSE</button></span></header><pre id="mail-error-message"></pre></section>
+    <div id="layout">
+      <section id="message-list" aria-label="Mail list">Open Settings to connect a mailbox.</section>
+      <article id="message-view" aria-label="Selected email"><div id="message-meta">Select a mail to read it.</div><h2 id="subject"></h2><div id="message-body"></div></article>
+    </div>
+  </main>
+  <div id="connection-overlay" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+    <section id="connection-panel">
+    <header><strong id="settings-title">MAIL SETTINGS</strong><button id="close-settings" class="paper-btn" type="button">DONE</button></header>
+    <p class="hint">Connect using secure IMAP (port 993) or POP3 (port 995). Credentials saved to your Un-Reader account are encrypted with your PIN. You can also opt to remember them on this device for automatic sign-in. Mail credentials are sent to the Un-Reader server over HTTPS for each mail request.</p>
+    <form id="connection">
+      <label>Protocol<select class="paper-input" id="protocol"><option value="imap">IMAP</option><option value="pop3">POP3</option></select></label>
+      <label>Provider<select class="paper-input" id="provider"><option value="custom">Custom</option><option value="gmail">Gmail</option><option value="yahoo">Yahoo Mail</option><option value="outlook">Outlook.com</option><option value="icloud">iCloud Mail</option><option value="proton">Proton Mail (Bridge)</option></select></label>
+      <label>Mail server<input class="paper-input" id="host" type="text" placeholder="imap.example.com" autocomplete="off" required></label>
+      <label>Secure port<input class="paper-input" id="port" type="number" min="993" max="995" value="993" required></label>
+      <label>Username<input class="paper-input" id="username" type="text" autocomplete="username" required></label>
+      <label>Password<input class="paper-input" id="password" type="password" autocomplete="current-password" required></label>
+      <label id="mailbox-label">Mailbox<input class="paper-input" id="mailbox" type="text" value="INBOX" autocomplete="off"></label>
+      <p id="provider-note" class="hint" role="status" aria-live="polite"></p>
+      <fieldset id="credential-vault">
+        <legend>Saved mail credentials</legend>
+        <p class="hint">Encrypted in this browser with your PIN; only ciphertext is uploaded. Your PIN never leaves this device.</p>
+        <label class="save-option"><input id="save-credentials" type="checkbox"> <span>Save credentials to your Un-Reader account with a PIN</span></label>
+        <label class="save-option"><input id="remember-device" type="checkbox"> <span>Remember on this device and sign in automatically. Anyone who can use this browser profile can open this mailbox.</span></label>
+        <div class="vault-fields">
+          <label for="vault-pin">Key PIN (at least 6 characters)<input class="paper-input" id="vault-pin" type="password" autocomplete="off"></label>
+          <label id="vault-pin-confirm-row" for="vault-pin-confirm" hidden>Confirm PIN<input class="paper-input" id="vault-pin-confirm" type="password" autocomplete="off"></label>
+        </div>
+        <div class="vault-actions">
+          <button class="paper-btn shadow" id="load-saved-credentials" type="button" hidden>LOAD SAVED CREDENTIALS</button>
+          <button class="paper-btn shadow" id="remove-saved-credentials" type="button" hidden>REMOVE SAVED CREDENTIALS</button>
+        </div>
+        <p id="vault-status" role="status" aria-live="polite"></p>
+      </fieldset>
+      <div class="actions"><button class="paper-btn shadow" id="connect" type="submit">CONNECT / REFRESH</button></div>
+    </form>
+    </section>
+  </div>
+  <div id="help-overlay" role="dialog" aria-modal="true" aria-labelledby="help-title">
+    <section id="help-panel">
+      <header><strong id="help-title">MAIL SETUP HELP</strong><button id="close-help" class="paper-btn" type="button">CLOSE HELP</button></header>
+      <p>Choose IMAP or POP3, select a provider preset, then enter your full email address and provider-approved password. This app connects over secure IMAP port 993 or POP3 port 995. It currently uses password authentication; providers requiring OAuth sign-in may not work.</p>
+      <h3>Gmail</h3>
+      <p>Enable the protocol you selected in Gmail’s <a href="https://mail.google.com/mail/u/0/#settings/fwdandpop" target="_blank" rel="noopener">Forwarding and POP/IMAP settings</a>. Use <code>imap.gmail.com:993</code> or <code>pop.gmail.com:995</code>. If Google rejects your regular password, use an <a href="https://myaccount.google.com/apppasswords" target="_blank" rel="noopener">App Password</a> (requires 2-Step Verification). OAuth sign-in is not supported by this app.</p>
+      <h3>Yahoo Mail</h3>
+      <p>Use <code>imap.mail.yahoo.com:993</code> or <code>pop.mail.yahoo.com:995</code>, your full email address, and a generated <a href="https://login.yahoo.com/account/security" target="_blank" rel="noopener">Yahoo app password</a>.</p>
+      <h3>Outlook.com / Hotmail</h3>
+      <p>The server names are <code>outlook.office365.com</code> on port 993 (IMAP) or 995 (POP3). Microsoft requires OAuth2/Modern Auth for Outlook.com, which this client does not yet support, so password sign-in will fail. POP or IMAP access may also need to be enabled in Outlook settings.</p>
+      <h3>iCloud Mail</h3>
+      <p>iCloud supports IMAP only: <code>imap.mail.me.com:993</code>. Use an <a href="https://account.apple.com/" target="_blank" rel="noopener">Apple app-specific password</a>; POP3 is not available.</p>
+      <h3>Proton Mail</h3>
+      <p>Proton does not provide direct IMAP or POP3 access. Its supported mail-client setup uses <a href="https://proton.me/support/imap-smtp-and-pop3-setup" target="_blank" rel="noopener">Proton Mail Bridge</a>, which runs on your computer and exposes IMAP only to local apps. This app’s mail connection runs on the server, so it cannot reach Bridge on your computer. The Microsoft OAuth example in <a href="https://github.com/ReKindleOS/ReKindle" target="_blank" rel="noopener">ReKindle</a> does not apply to Proton.</p>
+      <h3>Other providers</h3>
+      <p>Select Custom and enter the mail server provided by your service. The server must support implicit TLS on port 993 for IMAP or 995 for POP3. Some work or school accounts require administrator setup or OAuth and cannot connect with this app.</p>
+      <p>If a server rejects access, its response appears in the <strong>MAIL SERVER RESPONSE</strong> panel. For example, a POP-disabled error means POP access must be enabled in that provider’s settings.</p>
+    </section>
+  </div>
+  </div>
+  <script>
+    (function () {
+      var session = null;
+      var token = localStorage.getItem('token') || '';
+      var protocol = document.getElementById('protocol');
+      var savedProtocol = localStorage.getItem('mailProtocol');
+      if (savedProtocol === 'imap' || savedProtocol === 'pop3') protocol.value = savedProtocol;
+      var provider = document.getElementById('provider');
+      var status = document.getElementById('status');
+      var list = document.getElementById('message-list');
+      var backend = typeof BACKEND_URL === 'string' ? BACKEND_URL : '';
+      var settingsOverlay = document.getElementById('connection-overlay');
+      var helpOverlay = document.getElementById('help-overlay');
+
+      function setStatus(message) { status.textContent = message; }
+      function showSettings() { settingsOverlay.classList.add('open'); }
+      function closeSettings() { settingsOverlay.classList.remove('open'); }
+      function showHelp() { helpOverlay.classList.add('open'); }
+      function closeHelp() { helpOverlay.classList.remove('open'); }
+      function clearMailError() {
+        document.getElementById('mail-error').hidden = true;
+        document.getElementById('mail-error-message').textContent = '';
+      }
+      function showMailError(error) {
+        var message = String(error && error.message || error || 'The mail server request failed.');
+        document.getElementById('mail-error-message').textContent = message;
+        document.getElementById('mail-error').hidden = false;
+        setStatus('Mail request failed. See the server response above; open HELP for provider setup tips.');
+      }
+      function setVaultStatus(message) { document.getElementById('vault-status').textContent = message || ''; }
+      function renderText(id, value) { document.getElementById(id).textContent = value || ''; }
+      function refreshVaultButtons() {
+        return UnreaderMailCredentialVault.status().then(function (result) {
+          var saved = !!result.data;
+          document.getElementById('load-saved-credentials').hidden = !saved;
+          document.getElementById('remove-saved-credentials').hidden = !saved;
+          setVaultStatus(saved ? 'Encrypted mail credentials are saved to your account. Enter the PIN to load them.' : 'No saved credentials.');
+          return saved;
+        }).catch(function () {
+          document.getElementById('load-saved-credentials').hidden = true;
+          document.getElementById('remove-saved-credentials').hidden = true;
+          return false;
+        });
+      }
+      function validCredentials(credentials) {
+        return credentials && ['imap', 'pop3'].includes(credentials.protocol) &&
+          Number(credentials.port) === (credentials.protocol === 'imap' ? 993 : 995) &&
+          credentials.host && credentials.username && credentials.password;
+      }
+      function fillCredentials(credentials) {
+        protocol.value = credentials.protocol;
+        protocol.dispatchEvent(new Event('change'));
+        document.getElementById('host').value = credentials.host;
+        document.getElementById('port').value = credentials.port;
+        document.getElementById('username').value = credentials.username;
+        document.getElementById('password').value = credentials.password;
+        document.getElementById('mailbox').value = credentials.mailbox || 'INBOX';
+        session = credentials;
+      }
+      function request(action, id, page) {
+        if (!session) return Promise.reject(new Error('Connect first.'));
+        if (!token) return Promise.reject(new Error('Log in to Un-Reader before using mail.'));
+        return fetch(backend + '/api/mail/messages', {
+          method: 'POST',
+          cache: 'no-store',
+          headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+          body: JSON.stringify(Object.assign({}, session, { action: action, id: id, page: page }))
+        }).then(function (response) {
+          return response.json().then(function (data) {
+            if (!response.ok) throw new Error(data.error || 'Mail request failed.');
+            return data;
+          });
+        });
+      }
+
+      function openMessage(id) {
+        clearMailError();
+        setStatus('Loading message…');
+        request('read', id).then(function (result) {
+          var message = result.message || {};
+          renderText('subject', message.subject);
+          renderText('message-meta', [message.from && 'From: ' + message.from, message.to && 'To: ' + message.to, message.date].filter(Boolean).join(' • '));
+          var body = document.getElementById('message-body');
+          if (message.html) {
+            body.classList.add('html-message');
+            body.innerHTML = message.html;
+            body.querySelectorAll('[data-mail-remote-src]').forEach(function (image) {
+              image.src = image.getAttribute('data-mail-remote-src').replace(/&amp;/gi, '&').replace(/&#0*38;|&#x0*26;/gi, '&');
+              image.removeAttribute('data-mail-remote-src');
+            });
+          } else {
+            body.classList.remove('html-message');
+            body.textContent = message.text || '';
+          }
+          setStatus('Message loaded.');
+        }).catch(showMailError);
+      }
+
+      var mailPage = 0;
+      function loadMessages(page) {
+        clearMailError();
+        var initial = page === 0;
+        var moreButton = document.getElementById('load-more-mail');
+        if (initial) {
+          mailPage = 0;
+          list.textContent = 'Loading…';
+        } else if (moreButton) {
+          moreButton.disabled = true;
+          moreButton.textContent = 'LOADING…';
+        }
+        setStatus(initial ? 'Connecting and loading recent mail…' : 'Loading older mail…');
+        return request('list', null, page).then(function (result) {
+          if (initial) list.textContent = '';
+          else if (moreButton) moreButton.remove();
+          var messages = result.messages || [];
+          if (initial && !messages.length) list.textContent = 'No mail in this mailbox.';
+          messages.forEach(function (message) {
+            var button = document.createElement('button');
+            var small = document.createElement('small');
+            button.type = 'button';
+            button.className = 'paper-btn shadow mail-row';
+            button.textContent = message.subject || ('Message ' + message.id);
+            small.textContent = [message.from, message.date, message.size ? Math.ceil(message.size / 1024) + ' KB' : ''].filter(Boolean).join(' • ');
+            button.appendChild(small);
+            button.addEventListener('click', function () { openMessage(message.id); });
+            list.appendChild(button);
+          });
+          mailPage = page + 1;
+          if (result.hasMore) {
+            var loadMore = document.createElement('button');
+            loadMore.id = 'load-more-mail';
+            loadMore.type = 'button';
+            loadMore.className = 'paper-btn shadow mail-row';
+            loadMore.textContent = 'LOAD OLDER MAIL';
+            loadMore.addEventListener('click', function () { loadMessages(mailPage); });
+            list.appendChild(loadMore);
+          }
+          setStatus('Loaded ' + messages.length + (page ? ' older' : '') + ' message(s).' + (result.hasMore ? ' More mail is available.' : ''));
+          return true;
+        }).catch(function (error) {
+          if (initial) list.textContent = 'Could not load mail.';
+          else if (moreButton) { moreButton.disabled = false; moreButton.textContent = 'RETRY LOADING OLDER MAIL'; }
+          showMailError(error);
+          return false;
+        });
+      }
+
+      var mailProviders = {
+        gmail: { imap: 'imap.gmail.com', pop3: 'pop.gmail.com', note: 'Enable IMAP or POP in Gmail settings. Google may require an app password; OAuth sign-in is not supported by this client.' },
+        yahoo: { imap: 'imap.mail.yahoo.com', pop3: 'pop.mail.yahoo.com', note: 'Use your full email address. Yahoo requires a generated app password for third-party mail clients.' },
+        outlook: { imap: 'outlook.office365.com', pop3: 'outlook.office365.com', note: 'Outlook.com requires OAuth2/Modern Auth, which this client does not support; this preset may not authenticate.' },
+        icloud: { imap: 'imap.mail.me.com', note: 'iCloud Mail supports IMAP, not POP3. Use an app-specific password.' },
+        proton: { unsupported: true, note: 'Proton Mail requires Bridge on your computer. This hosted server cannot reach it; Proton does not provide POP3 or direct IMAP.' }
+      };
+      function updateMailSettings() {
+        var selected = mailProviders[provider.value];
+        var hostInput = document.getElementById('host');
+        var connectButton = document.getElementById('connect');
+        provider.querySelector('option[value="icloud"]').disabled = protocol.value === 'pop3';
+        if (selected && selected.unsupported) {
+          hostInput.value = '';
+          hostInput.readOnly = true;
+          connectButton.disabled = true;
+          document.getElementById('port').value = protocol.value === 'imap' ? '993' : '995';
+          document.getElementById('mailbox-label').style.display = protocol.value === 'imap' ? 'grid' : 'none';
+          document.getElementById('provider-note').textContent = selected.note;
+          return;
+        }
+        if (selected && !selected[protocol.value]) { provider.value = 'custom'; selected = null; }
+        document.getElementById('port').value = protocol.value === 'imap' ? '993' : '995';
+        document.getElementById('mailbox-label').style.display = protocol.value === 'imap' ? 'grid' : 'none';
+        connectButton.disabled = false;
+        hostInput.readOnly = !!selected;
+        if (selected) hostInput.value = selected[protocol.value];
+        document.getElementById('provider-note').textContent = selected ? selected.note : '';
+      }
+      provider.addEventListener('change', function () {
+        if (provider.value === 'custom') document.getElementById('host').value = '';
+        updateMailSettings();
+      });
+      protocol.addEventListener('change', function () {
+        localStorage.setItem('mailProtocol', protocol.value);
+        updateMailSettings();
+      });
+      document.getElementById('settings').addEventListener('click', showSettings);
+      document.getElementById('close-settings').addEventListener('click', closeSettings);
+      document.getElementById('help').addEventListener('click', showHelp);
+      document.getElementById('error-help').addEventListener('click', showHelp);
+      document.getElementById('close-help').addEventListener('click', closeHelp);
+      document.getElementById('dismiss-mail-error').addEventListener('click', clearMailError);
+      document.addEventListener('keydown', function (event) {
+        if (event.key === 'Escape') { closeHelp(); closeSettings(); }
+      });
+      document.getElementById('connection').addEventListener('submit', function (event) {
+        event.preventDefault();
+        if (mailProviders[provider.value] && mailProviders[provider.value].unsupported) {
+          setStatus('Proton Mail cannot connect through this server. See HELP for details.');
+          showHelp();
+          return;
+        }
+        var host = document.getElementById('host').value.trim();
+        var username = document.getElementById('username').value.trim();
+        var password = document.getElementById('password').value;
+        var port = Number(document.getElementById('port').value);
+        var saveCredentials = document.getElementById('save-credentials').checked;
+        var rememberDevice = document.getElementById('remember-device').checked;
+        var pin = document.getElementById('vault-pin').value;
+        if (!host || !username || !password || port !== (protocol.value === 'imap' ? 993 : 995)) {
+          setStatus('Enter a hostname, username, password, and the secure port for this protocol.');
+          return;
+        }
+        if (saveCredentials) {
+          var pinProblem = UnreaderMailCredentialVault.pinProblem(pin);
+          if (pinProblem) { setVaultStatus(pinProblem); return; }
+          if (pin !== document.getElementById('vault-pin-confirm').value) { setVaultStatus('The two PINs do not match.'); return; }
+        }
+        var credentials = {
+          protocol: protocol.value,
+          host: host,
+          port: port,
+          username: username,
+          password: password,
+          mailbox: document.getElementById('mailbox').value.trim() || 'INBOX'
+        };
+        session = credentials;
+        renderText('subject', '');
+        renderText('message-meta', 'Select a message to read it.');
+        renderText('message-body', '');
+        loadMessages(0).then(function (connected) {
+          if (!connected) {
+            if (saveCredentials) setVaultStatus('Mail sign-in failed, so these credentials were not saved.');
+            return;
+          }
+          closeSettings();
+          var tasks = [];
+          if (saveCredentials) {
+            setVaultStatus('Encrypting and saving credentials…');
+            tasks.push(UnreaderMailCredentialVault.save(credentials, pin).then(function () {
+              document.getElementById('save-credentials').checked = false;
+              document.getElementById('vault-pin').value = '';
+              document.getElementById('vault-pin-confirm').value = '';
+              document.getElementById('vault-pin-confirm-row').hidden = true;
+              setVaultStatus('Credentials encrypted and saved to your account.');
+              refreshVaultButtons();
+            }).catch(function (error) { setVaultStatus(error.message); }));
+          }
+          if (rememberDevice) {
+            tasks.push(UnreaderMailCredentialVault.remember(credentials).then(function () {
+              setVaultStatus('This device will sign in automatically. Anyone using this browser profile can open this mailbox.');
+            }).catch(function (error) { setVaultStatus('Mail connected, but device sign-in could not be enabled: ' + error.message); }));
+          } else {
+            tasks.push(UnreaderMailCredentialVault.forget().catch(function () {}));
+          }
+          Promise.all(tasks);
+        });
+      });
+
+      document.getElementById('save-credentials').addEventListener('change', function () {
+        var confirmRow = document.getElementById('vault-pin-confirm-row');
+        confirmRow.hidden = !this.checked;
+        if (!this.checked) {
+          document.getElementById('vault-pin').value = '';
+          document.getElementById('vault-pin-confirm').value = '';
+        }
+      });
+      document.getElementById('remember-device').addEventListener('change', function () {
+        if (this.checked) setVaultStatus('Saved on this browser only. Anyone using this browser profile can open this mailbox.');
+      });
+      document.getElementById('load-saved-credentials').addEventListener('click', function () {
+        var pin = document.getElementById('vault-pin').value;
+        this.disabled = true;
+        setVaultStatus('Unlocking saved credentials…');
+        UnreaderMailCredentialVault.load(pin).then(function (credentials) {
+          if (!validCredentials(credentials)) throw new Error('Saved mail credentials are incomplete.');
+          fillCredentials(credentials);
+          document.getElementById('vault-pin').value = '';
+          setVaultStatus('Saved credentials unlocked.');
+          loadMessages(0).then(function (connected) {
+            if (!connected) return;
+            closeSettings();
+            if (document.getElementById('remember-device').checked) {
+              UnreaderMailCredentialVault.remember(credentials).catch(function (error) { setVaultStatus(error.message); });
+            } else UnreaderMailCredentialVault.forget();
+          });
+        }).catch(function (error) { setVaultStatus(error.message); }).then(function () { this.disabled = false; }.bind(this));
+      });
+      document.getElementById('remove-saved-credentials').addEventListener('click', function () {
+        if (!window.confirm('Remove saved mail credentials from your Un-Reader account?')) return;
+        this.disabled = true;
+        UnreaderMailCredentialVault.remove().then(function () {
+          return UnreaderMailCredentialVault.forget().catch(function () {});
+        }).then(function () {
+          document.getElementById('load-saved-credentials').hidden = true;
+          this.hidden = true;
+          document.getElementById('vault-pin').value = '';
+          document.getElementById('vault-pin-confirm').value = '';
+          setVaultStatus('Removed saved mail credentials.');
+        }.bind(this)).catch(function (error) { setVaultStatus(error.message); }).then(function () { this.disabled = false; }.bind(this));
+      });
+      document.getElementById('clear').addEventListener('click', function () {
+        UnreaderMailCredentialVault.forget().catch(function () {});
+        clearMailError();
+        session = null;
+        document.getElementById('password').value = '';
+        document.getElementById('connection').reset();
+        document.getElementById('vault-pin').value = '';
+        document.getElementById('vault-pin-confirm').value = '';
+        document.getElementById('vault-pin-confirm-row').hidden = true;
+        protocol.value = localStorage.getItem('mailProtocol') === 'pop3' ? 'pop3' : 'imap';
+        protocol.dispatchEvent(new Event('change'));
+        mailPage = 0;
+        list.textContent = 'Connect to load recent mail.';
+        renderText('subject', '');
+        renderText('message-meta', 'Select a message to read it.');
+        renderText('message-body', '');
+        setStatus('Credentials cleared from this page.');
+      });
+      window.addEventListener('pagehide', function () { session = null; });
+      protocol.dispatchEvent(new Event('change'));
+      UnreaderMailCredentialVault.loadRemembered().then(function (remembered) {
+        if (remembered && validCredentials(remembered)) {
+          fillCredentials(remembered);
+          refreshVaultButtons();
+          if (!token) {
+            showSettings();
+            setStatus('Sign in to Un-Reader to connect your remembered mailbox.');
+            return;
+          }
+          setStatus('Signing in to your remembered mailbox…');
+          loadMessages(0).then(function (connected) { if (!connected) showSettings(); });
+          return;
+        }
+        refreshVaultButtons().then(function (saved) {
+          if (!saved) return;
+          showSettings();
+          setStatus(token ? 'Enter your mail PIN to connect.' : 'Sign in to Un-Reader, then enter your mail PIN.');
+        });
+      }).catch(function (error) {
+        refreshVaultButtons();
+        showSettings();
+        setStatus(error.message);
+      });
+    }());
+  </script>
+</body>
+</html>

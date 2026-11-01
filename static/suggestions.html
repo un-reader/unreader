@@ -114,6 +114,10 @@
       return text.value;
     }
 
+    function displayText(str) {
+      return escapeHtml(decodeEntities(str));
+    }
+
     function setStatus(msg) {
       var el = document.getElementById("status-log");
       el.textContent = msg;
@@ -224,15 +228,15 @@
           '<div>@' + escapeHtml(post.username || "anonymous") + '</div>' +
           '<div>' + escapeHtml(dateDisplay) + '</div>' +
         '</div>' +
-          '<div class="card-title">' + escapeHtml(title) + '</div>';
+          '<div class="card-title">' + displayText(title) + '</div>';
 
       if (post.completion === true) {
         html += '<div class="card-done">COMPLETED</div>';
       }
       if (post.admin_filter) {
-        html += '<div class="card-status">STATUS: ' + escapeHtml(decodeEntities(post.admin_filter)) + '</div>';
+        html += '<div class="card-status">STATUS: ' + displayText(post.admin_filter) + '</div>';
       }
-      html += '<div class="card-desc">' + escapeHtml(desc) + '</div>';
+      html += '<div class="card-desc">' + displayText(desc) + '</div>';
       html += '<div class="card-meta">#' + post.id + '</div>';
 
       var comments = Array.isArray(post.comments) ? post.comments : [];
@@ -240,7 +244,7 @@
       for (var c = 0; c < comments.length; c++) {
         var comment = comments[c];
         var commentDate = comment.created_at ? new Date(Number(comment.created_at)).toLocaleString() : "";
-        html += '<div class="suggestion-comment"><div class="suggestion-comment-head">@' + escapeHtml(comment.username || "anonymous") + (commentDate ? ' &bull; ' + escapeHtml(commentDate) : '') + '</div><div class="suggestion-comment-body">' + escapeHtml(comment.content) + '</div></div>';
+        html += '<div class="suggestion-comment"><div class="suggestion-comment-head">@' + escapeHtml(comment.username || "anonymous") + (commentDate ? ' &bull; ' + escapeHtml(commentDate) : '') + '</div><div class="suggestion-comment-body">' + displayText(comment.content) + '</div></div>';
       }
       if (token) {
         html += '<textarea class="kindle-input paper-input suggestion-comment-input" maxlength="2000" aria-label="Comment on suggestion #' + post.id + '" placeholder="Write a comment..."></textarea><button class="paper-btn suggestion-comment-submit">POST COMMENT</button><span class="suggestion-comment-status" aria-live="polite"></span>';

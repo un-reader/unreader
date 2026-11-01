@@ -372,6 +372,156 @@ var UnreaderGitHubTokenVault = (function () {
   };
 }());
 
+var UnreaderMailCredentialVault = (function () {
+  var iterations = 600000;
+  var minPinLength = 6;
+  var contextName = 'unreader-mail-credentials-pin-v2';
+  var context = new TextEncoder().encode(contextName);
+
+  function bytesToBase64(bytes) {
+    var binary = '';
+    for (var i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+    return btoa(binary);
+  }
+
+  function base64ToBytes(value) {
+    var binary = atob(value);
+    var bytes = new Uint8Array(binary.length);
+    for (var i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    return bytes;
+  }
+
+  function pinProblem(pin) {
+    return typeof pin !== 'string' || pin.length < minPinLength
+      ? 'Your PIN must be at least ' + minPinLength + ' characters.'
+      : '';
+  }
+
+  function recordProblem(record) {
+    return !record || record.version !== 2 || record.context !== contextName ||
+      record.kdf !== 'PBKDF2-SHA-256' || record.iterations !== iterations || record.cipher !== 'AES-GCM-256'
+      ? 'Saved mail credential format is unsupported.'
+      : '';
+  }
+
+  function request(method, data) {
+    var token = localStorage.getItem('token');
+    if (!token) return Promise.reject(new Error('Sign in to your Unreader account to save or load mail credentials.'));
+    var options = { method: method, headers: { Authorization: 'Bearer ' + token } };
+    if (data) {
+      options.headers['Content-Type'] = 'application/json';
+      options.body = JSON.stringify(data);
+    }
+    return fetch(BACKEND_URL + '/api/user/mail-credentials', options).then(function (response) {
+      return response.json().then(function (body) {
+        if (!response.ok) throw new Error(body.error || 'Mail credential vault request failed.');
+        return body;
+      });
+    });
+  }
+
+  function deriveKey(pin, salt) {
+    if (!window.crypto || !window.crypto.subtle) return Promise.reject(new Error('Encrypted credential storage requires HTTPS and Web Crypto support.'));
+    return window.crypto.subtle.importKey('raw', new TextEncoder().encode(pin), 'PBKDF2', false, ['deriveKey'])
+      .then(function (material) {
+        return window.crypto.subtle.deriveKey({ name: 'PBKDF2', salt: salt, iterations: iterations, hash: 'SHA-256' }, material, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
+      });
+  }
+
+  function save(credentials, pin) {
+    var problem = pinProblem(pin);
+    if (problem) return Promise.reject(new Error(problem));
+    if (!window.crypto || !window.crypto.subtle) return Promise.reject(new Error('Encrypted credential storage requires HTTPS and Web Crypto support.'));
+    var salt = window.crypto.getRandomValues(new Uint8Array(16));
+    var iv = window.crypto.getRandomValues(new Uint8Array(12));
+    return deriveKey(pin, salt).then(function (key) {
+      return window.crypto.subtle.encrypt({ name: 'AES-GCM', iv: iv, additionalData: context }, key,
+        new TextEncoder().encode(JSON.stringify(credentials)));
+    }).then(function (encrypted) {
+      return request('PUT', { data: {
+        version: 2, context: contextName, kdf: 'PBKDF2-SHA-256', iterations: iterations,
+        cipher: 'AES-GCM-256', salt: bytesToBase64(salt), iv: bytesToBase64(iv),
+        ciphertext: bytesToBase64(new Uint8Array(encrypted))
+      } });
+    });
+  }
+
+  function load(pin) {
+    var problem = pinProblem(pin);
+    if (problem) return Promise.reject(new Error(problem));
+    var record;
+    return request('GET').then(function (response) {
+      record = response.data;
+      var invalid = recordProblem(record);
+      if (invalid) throw new Error(record ? invalid : 'No saved mail credentials were found.');
+      return deriveKey(pin, base64ToBytes(record.salt));
+    }).then(function (key) {
+      return window.crypto.subtle.decrypt({ name: 'AES-GCM', iv: base64ToBytes(record.iv), additionalData: context }, key, base64ToBytes(record.ciphertext))
+        .catch(function () { throw new Error('Could not unlock the saved mail credentials. Check your PIN.'); });
+    }).then(function (clear) {
+      return JSON.parse(new TextDecoder().decode(clear));
+    });
+  }
+
+  function deviceRecord(method, value) {
+    return new Promise(function (resolve, reject) {
+      if (!window.indexedDB) return reject(new Error('This browser does not support device sign-in storage.'));
+      var opening = window.indexedDB.open('unreader-mail-device-unlock', 1);
+      opening.onupgradeneeded = function () { opening.result.createObjectStore('vault'); };
+      opening.onerror = function () { reject(opening.error || new Error('Could not open device sign-in storage.')); };
+      opening.onsuccess = function () {
+        var db = opening.result;
+        var transaction;
+        try {
+          transaction = db.transaction('vault', method === 'get' ? 'readonly' : 'readwrite');
+          var store = transaction.objectStore('vault');
+          var request = method === 'put' ? store.put(value, 'remembered') : store[method]('remembered');
+          var result;
+          request.onsuccess = function () { result = request.result; };
+          request.onerror = function () { reject(request.error || new Error('Device sign-in storage failed.')); };
+          transaction.oncomplete = function () { db.close(); resolve(result); };
+          transaction.onerror = transaction.onabort = function () { db.close(); reject(transaction.error || new Error('Device sign-in storage failed.')); };
+        } catch (error) {
+          db.close();
+          reject(error);
+        }
+      };
+    });
+  }
+
+  function remember(credentials) {
+    if (!window.crypto || !window.crypto.subtle) return Promise.reject(new Error('Device sign-in requires Web Crypto support.'));
+    var iv = window.crypto.getRandomValues(new Uint8Array(12));
+    return window.crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']).then(function (key) {
+      return window.crypto.subtle.encrypt({ name: 'AES-GCM', iv: iv, additionalData: context }, key,
+        new TextEncoder().encode(JSON.stringify(credentials))).then(function (encrypted) {
+        return deviceRecord('put', { key: key, iv: bytesToBase64(iv), ciphertext: bytesToBase64(new Uint8Array(encrypted)) });
+      });
+    });
+  }
+
+  function loadRemembered() {
+    return deviceRecord('get').then(function (record) {
+      if (!record) return null;
+      return window.crypto.subtle.decrypt({ name: 'AES-GCM', iv: base64ToBytes(record.iv), additionalData: context }, record.key, base64ToBytes(record.ciphertext))
+        .then(function (clear) { return JSON.parse(new TextDecoder().decode(clear)); })
+        .catch(function () { throw new Error('Could not unlock mail credentials saved on this device.'); });
+    });
+  }
+
+  return {
+    minPinLength: minPinLength,
+    pinProblem: pinProblem,
+    status: function () { return request('GET'); },
+    save: save,
+    load: load,
+    remove: function () { return request('DELETE'); },
+    remember: remember,
+    loadRemembered: loadRemembered,
+    forget: function () { return deviceRecord('delete'); }
+  };
+}());
+
 function startRichPresence(mode) {
   const token = localStorage.getItem('token');
   if (!token) return;

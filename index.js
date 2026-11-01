@@ -7,6 +7,13 @@ import { createDatabase, coordinatorAuthorized } from './database.js';
 import cors from 'cors';
 import sanitizeHtml from 'sanitize-html';
 import { pathToFileURL } from 'node:url';
+import { lookup } from 'node:dns/promises';
+import { isIP } from 'node:net';
+import { connect as tlsConnect } from 'node:tls';
+import ipaddr from 'ipaddr.js';
+import { ImapFlow } from 'imapflow';
+import Pop3Command from 'node-pop3';
+import PostalMime from 'postal-mime';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'brutalist_secret_key_123';
 const DO_LOGGING = true;
@@ -253,6 +260,227 @@ app.get('/portal-2d-editor.html', (req, res) => {
 });
 
 app.use(express.static('./static/'));
+
+const mailRequestLimits = new Map();
+const mailRequestsPerMinute = 12;
+
+function isPublicUnicastIp(address) {
+  try { return ipaddr.parse(address).range() === 'unicast'; }
+  catch { return false; }
+}
+
+async function resolvePublicHost(host) {
+  const normalized = String(host || '').trim().replace(/\.$/, '').toLowerCase();
+  if (
+    normalized.length > 253 ||
+    !/^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/.test(normalized) ||
+    isIP(normalized)
+  ) throw new Error('Enter a public server hostname.');
+  const addresses = await lookup(normalized, { all: true, verbatim: true });
+  if (!addresses.length || addresses.some(({ address }) => !isPublicUnicastIp(address)))
+    throw new Error('That server resolves to a non-public address.');
+  return { host: normalized, address: (addresses.find(({ family }) => family === 4) || addresses[0]).address };
+}
+
+function validateMailRequest(body) {
+  const protocol = body?.protocol;
+  const action = body?.action;
+  const port = Number(body?.port);
+  const username = typeof body?.username === 'string' ? body.username.trim() : '';
+  const password = typeof body?.password === 'string' ? body.password : '';
+  const mailbox = typeof body?.mailbox === 'string' ? body.mailbox.trim() : 'INBOX';
+  const id = String(body?.id || '');
+  const page = body?.page === undefined ? 0 : Number(body.page);
+  if (!['imap', 'pop3'].includes(protocol) || !['list', 'read'].includes(action))
+    throw new Error('Choose IMAP or POP3 and a supported mail action.');
+  if (port !== (protocol === 'imap' ? 993 : 995))
+    throw new Error(`Use the secure ${protocol === 'imap' ? '993' : '995'} port.`);
+  if (!username || username.length > 320 || !password || password.length > 1024)
+    throw new Error('Enter your mail username and password.');
+  if (body?.action === 'list' && (!Number.isSafeInteger(page) || page < 0 || page > 10000))
+    throw new Error('Choose a valid mail page.');
+  if (!mailbox || mailbox.length > 200 || /[\r\n\0]/.test(mailbox))
+    throw new Error('Enter a valid mailbox name.');
+  if (action === 'read' && (protocol === 'imap'
+    ? !/^[1-9]\d{0,9}$/.test(id)
+    : !/^(?:uid:[!-~]{1,70}|num:[1-9]\d{0,9})$/.test(id)))
+    throw new Error('Choose a valid message.');
+  return { protocol, action, port, username, password, mailbox, id, page };
+}
+
+async function parseMailSource(source) {
+  const parsed = await PostalMime.parse(source);
+  const inlineImages = new Map();
+  for (const attachment of parsed.attachments || []) {
+    const contentId = String(attachment.contentId || '').replace(/^<|>$/g, '').trim().toLowerCase();
+    const mimeType = String(attachment.mimeType || '').toLowerCase();
+    if (!contentId || !attachment.content || !/^image\/(?:png|jpe?g|gif|webp|bmp)$/.test(mimeType)) continue;
+    const content = Buffer.from(attachment.content);
+    if (content.length <= 512 * 1024) inlineImages.set(contentId, `data:${mimeType};base64,${content.toString('base64')}`);
+  }
+  const html = String(parsed.html || '').replace(/<img\b[^>]*>/gi, (tag) => {
+    const sources = [];
+    const attributes = /\s+(src|srcset|data-src|data-original|data-lazy-src|data-mail-remote-src)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/gi;
+    let match;
+    while ((match = attributes.exec(tag))) {
+      const name = match[1].toLowerCase();
+      const value = match[2] || match[3] || match[4] || '';
+      if (name === 'srcset') {
+        sources.push(...value.split(',').map((candidate) => candidate.trim().replace(/\s+\d+(?:\.\d+)?(?:w|x)$/i, '')));
+      } else sources.push(value);
+    }
+    const cleanTag = tag.replace(attributes, '');
+    for (const candidate of sources) {
+      const src = candidate.trim().replace(/^\/\//, 'https://').replace(/&amp;/gi, '&').replace(/&#0*38;|&#x0*26;/gi, '&');
+      const cid = /^cid:(.+)$/i.exec(src);
+      const inline = cid && inlineImages.get(cid[1].replace(/^<|>$/g, '').trim().toLowerCase());
+      if (inline) return cleanTag.replace(/<img\b/i, `<img src="${inline}"`);
+      if (/^https?:\/\//i.test(src))
+        return cleanTag.replace(/<img\b/i, `<img data-mail-remote-src="${src.replace(/&/g, '&amp;').replace(/"/g, '&quot;')}"`);
+    }
+    return cleanTag;
+  });
+  const safeHtml = sanitizeHtml(html, {
+    allowedTags: ['a', 'abbr', 'b', 'blockquote', 'br', 'caption', 'center', 'code', 'dd', 'del', 'div', 'dl', 'dt', 'em', 'font', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'hr', 'i', 'img', 'li', 'ol', 'p', 'pre', 's', 'small', 'span', 'strong', 'sub', 'sup', 'table', 'tbody', 'td', 'tfoot', 'th', 'thead', 'tr', 'u', 'ul'],
+    allowedAttributes: {
+      a: ['href', 'title'],
+      font: ['color', 'face', 'size'],
+      img: ['src', 'alt', 'title', 'width', 'height', 'data-mail-remote-src'],
+      table: ['align', 'border', 'cellpadding', 'cellspacing', 'width'],
+      td: ['align', 'colspan', 'rowspan', 'valign', 'width'],
+      th: ['align', 'colspan', 'rowspan', 'valign', 'width'],
+      '*': ['style']
+    },
+    allowedSchemes: ['http', 'https', 'mailto'],
+    allowedSchemesByTag: { img: ['data'] },
+    allowProtocolRelative: false,
+    allowedStyles: {
+      '*': {
+        'color': [/^#[0-9a-f]{3,8}$/i, /^(?:rgb|rgba|hsl|hsla)\([\d\s.,%]+\)$/i, /^[a-z]{1,20}$/i],
+        'background-color': [/^#[0-9a-f]{3,8}$/i, /^(?:rgb|rgba|hsl|hsla)\([\d\s.,%]+\)$/i, /^[a-z]{1,20}$/i],
+        'font-size': [/^\d+(?:\.\d+)?(?:px|pt|em|rem|%)$/i],
+        'font-weight': [/^(?:normal|bold|[1-9]00)$/i],
+        'text-align': [/^(?:left|right|center|justify)$/i],
+        'text-decoration': [/^(?:none|underline|line-through)$/i],
+        'width': [/^\d+(?:\.\d+)?(?:px|pt|em|rem|%)$/i],
+        'height': [/^\d+(?:\.\d+)?(?:px|pt|em|rem|%)$/i]
+      }
+    }
+  });
+  return {
+    from: parsed.from?.name ? `${parsed.from.name} <${parsed.from.address}>` : parsed.from?.address || '',
+    to: (parsed.to || []).map((address) => address.name ? `${address.name} <${address.address}>` : address.address).join(', '),
+    subject: String(parsed.subject || '(no subject)').slice(0, 500),
+    date: parsed.date || '',
+    text: String(parsed.text || '').slice(0, 100000) || 'No plain-text message body is available.',
+    html: safeHtml.slice(0, 1024 * 1024)
+  };
+}
+
+app.post('/api/mail/messages', authenticateToken, async (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  const usernameKey = String(req.user.username).toLowerCase();
+  const now = Date.now();
+  const previous = mailRequestLimits.get(usernameKey) || { count: 0, expiresAt: now + 60000 };
+  if (previous.expiresAt <= now) {
+    previous.count = 0;
+    previous.expiresAt = now + 60000;
+  }
+  if (previous.count >= mailRequestsPerMinute)
+    return res.status(429).json({ error: 'Mail requests are temporarily rate-limited.' });
+  previous.count++;
+  mailRequestLimits.set(usernameKey, previous);
+
+  let client;
+  try {
+    const request = validateMailRequest(req.body);
+    const server = await resolvePublicHost(req.body.host);
+    if (request.protocol === 'imap') {
+      client = new ImapFlow({
+        host: server.address,
+        port: request.port,
+        secure: true,
+        tls: { servername: server.host },
+        auth: { user: request.username, pass: request.password },
+        logger: false,
+        connectionTimeout: 10000,
+        greetingTimeout: 10000,
+        socketTimeout: 15000
+      });
+      client.on('error', () => {});
+      await client.connect();
+      const lock = await client.getMailboxLock(request.mailbox);
+      try {
+        if (request.action === 'list') {
+          const total = client.mailbox.exists || 0;
+          const end = total - request.page * 25;
+          const start = Math.max(1, end - 24);
+          const messages = end > 0 ? await client.fetchAll(`${start}:${end}`, {
+            uid: true, envelope: true, size: true
+          }) : [];
+          return res.json({ hasMore: start > 1, messages: messages.reverse().map((message) => ({
+            id: message.uid,
+            from: message.envelope?.from?.[0]?.name || message.envelope?.from?.[0]?.address || '',
+            subject: message.envelope?.subject || '(no subject)',
+            date: message.envelope?.date || '',
+            size: message.size || 0
+          })) });
+        }
+        const downloaded = await client.download(request.id, undefined, { uid: true, maxBytes: 1024 * 1024 });
+        const chunks = [];
+        let totalBytes = 0;
+        for await (const chunk of downloaded.content) {
+          totalBytes += chunk.length;
+          if (totalBytes > 1024 * 1024) throw new Error('Message is larger than the 1 MB viewing limit.');
+          chunks.push(chunk);
+        }
+        return res.json({ message: await parseMailSource(Buffer.concat(chunks)) });
+      } finally {
+        lock.release();
+      }
+    }
+
+    client = new Pop3Command({
+      user: request.username,
+      password: request.password,
+      host: server.address,
+      servername: server.host,
+      port: request.port,
+      tls: true,
+      timeout: 30000,
+      maxMailSize: 1024 * 1024
+    });
+    if (request.action === 'list') {
+      const stat = await client.STAT();
+      const total = Number(/^(\d+)\s+\d+/.exec(stat)?.[1]);
+      if (!Number.isSafeInteger(total)) throw new Error('The POP3 server returned an invalid mailbox count.');
+      const end = total - request.page * 25;
+      const start = Math.max(1, end - 24);
+      const messages = [];
+      for (let number = end; number >= start && number > 0; number--) {
+        messages.push({ id: `num:${number}`, subject: `Message ${number}`, size: 0 });
+      }
+      return res.json({ hasMore: start > 1, messages });
+    }
+    let number = request.id.slice(4);
+    if (request.id.startsWith('uid:')) {
+      const uid = (await client.UIDL()).find(([, value]) => value === number);
+      if (!uid) throw new Error('That message is no longer in the POP3 mailbox.');
+      number = uid[0];
+    }
+    const source = await client.RETR(number);
+    return res.json({ message: await parseMailSource(source) });
+  } catch (error) {
+    log('Mail request failed:', error.code || error.message);
+    const message = String(error.message || 'Could not access that mailbox.').slice(0, 1000);
+    return res.status(400).json({ error: message });
+  } finally {
+    try {
+      if (client instanceof ImapFlow && client.usable) await client.logout();
+      else if (client && typeof client.QUIT === 'function') await client.QUIT();
+    } catch {}
+  }
+});
 
 const cloudflareAiUsage = new Map();
 app.post('/api/ai/cloudflare', authenticateToken, async (req, res) => {
@@ -1168,6 +1396,66 @@ app.delete(
     }
   },
 );
+
+function isValidMailCredentialVault(value) {
+  return (
+    value &&
+    typeof value === 'object' &&
+    value.version === 2 &&
+    value.context === 'unreader-mail-credentials-pin-v2' &&
+    value.kdf === 'PBKDF2-SHA-256' &&
+    value.iterations === 600000 &&
+    value.cipher === 'AES-GCM-256' &&
+    typeof value.ciphertext === 'string' &&
+    /^[A-Za-z0-9+/]{20,24}={0,2}$/.test(value.salt || '') &&
+    /^[A-Za-z0-9+/]{16}={0,2}$/.test(value.iv || '') &&
+    /^[A-Za-z0-9+/]+={0,2}$/.test(value.ciphertext || '') &&
+    value.ciphertext.length <= 12000
+  );
+}
+
+app.get('/api/user/mail-credentials', authenticateToken, async (req, res) => {
+  try {
+    const result = await db.query(
+      'SELECT "MailCredentialsData" FROM users WHERE username = $1;',
+      [req.user.username],
+    );
+    const stored = result.rows[0]?.MailCredentialsData;
+    res.json({ data: stored ? JSON.parse(stored) : null });
+  } catch (error) {
+    log('Mail credential lookup failed:', error.message);
+    res.status(500).json({ error: 'Could not load saved mail credentials.' });
+  }
+});
+
+app.put('/api/user/mail-credentials', authenticateToken, async (req, res) => {
+  const data = req.body && req.body.data;
+  if (!isValidMailCredentialVault(data))
+    return res.status(400).json({ error: 'Encrypted mail credential data is invalid.' });
+  try {
+    await db.query(
+      'UPDATE users SET "MailCredentialsData" = $1 WHERE username = $2;',
+      [JSON.stringify(data), req.user.username],
+    );
+    res.json({ success: true });
+  } catch (error) {
+    log('Mail credential save failed:', error.message);
+    res.status(500).json({ error: 'Could not save encrypted mail credentials.' });
+  }
+});
+
+app.delete('/api/user/mail-credentials', authenticateToken, async (req, res) => {
+  try {
+    await db.query(
+      'UPDATE users SET "MailCredentialsData" = NULL WHERE username = $1;',
+      [req.user.username],
+    );
+    res.json({ success: true });
+  } catch (error) {
+    log('Mail credential removal failed:', error.message);
+    res.status(500).json({ error: 'Could not remove saved mail credentials.' });
+  }
+});
 
 app.post('/api/register', async (req, res) => {
   let { username, password } = req.body;
@@ -3187,12 +3475,187 @@ const server = isMainModule
     log(`Node strictly bound to port: ${process.env.PORT || 10000}`),
   )
   : null;
-const wss = server
-  ? new WebSocketServer({ server })
-  : new WebSocketServer({ noServer: true });
+const wss = new WebSocketServer({ noServer: true });
+const ircWss = new WebSocketServer({ noServer: true, maxPayload: 4096 });
+// IRC convention uses 6665–6669; 6697 is the standard TLS port, with 7000/7070 also offered by some networks.
+const ircTlsPorts = new Set([6665, 6666, 6667, 6668, 6669, 6697, 7000, 7070]);
+
+if (server) {
+  server.on('upgrade', (req, socket, head) => {
+    const path = new URL(req.url, 'http://localhost').pathname;
+    const target = path === '/irc' ? ircWss : path === '/' ? wss : null;
+    if (!target) {
+      socket.destroy();
+      return;
+    }
+    target.handleUpgrade(req, socket, head, (ws) => target.emit('connection', ws, req));
+  });
+}
+
+const ircConnectionsByUser = new Map();
+ircWss.on('connection', (ws) => {
+  ws.isAlive = true;
+  ws.on('pong', () => {
+    ws.isAlive = true;
+  });
+  let username = '';
+  let upstream = null;
+  let authenticated = false;
+  let connecting = false;
+  let upstreamBuffer = '';
+  let connectionSlotReserved = false;
+  let upstreamConnectTimeout = null;
+  const sentAt = [];
+  const authTimeout = setTimeout(() => ws.close(4001, 'Authentication timed out'), 10000);
+
+  function send(data) {
+    if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(data));
+  }
+
+  function releaseConnectionSlot() {
+    if (!connectionSlotReserved) return;
+    connectionSlotReserved = false;
+    const count = (ircConnectionsByUser.get(username) || 1) - 1;
+    if (count) ircConnectionsByUser.set(username, count);
+    else ircConnectionsByUser.delete(username);
+  }
+
+  function closeUpstream() {
+    if (upstreamConnectTimeout) clearTimeout(upstreamConnectTimeout);
+    upstreamConnectTimeout = null;
+    if (upstream) {
+      upstream.destroy();
+      upstream = null;
+    }
+    releaseConnectionSlot();
+  }
+
+  ws.on('message', async (raw) => {
+    try {
+      const data = JSON.parse(raw.toString());
+      if (!authenticated) {
+        if (data.type !== 'auth' || typeof data.token !== 'string') return ws.close(4001, 'Sign in required');
+        const decoded = jwt.verify(data.token, JWT_SECRET);
+        username = sanitizeUsername(decoded.username);
+        const roles = await getUserRoles(username);
+        if (roles.is_banned || roles.timeout_until > Date.now()) return ws.close(4003, 'Account unavailable');
+        authenticated = true;
+        clearTimeout(authTimeout);
+        send({ type: 'auth-ok' });
+        return;
+      }
+      if (data.type === 'connect') {
+        if (upstream || connecting) return send({ type: 'error', message: 'Already connected.' });
+        const host = String(data.host || '').trim();
+        const port = Number(data.port);
+        const nick = String(data.nick || '').trim();
+        const password = typeof data.password === 'string' ? data.password : '';
+        if (!ircTlsPorts.has(port) || !/^[A-Za-z0-9_\-\[\]{}^`|]{1,30}$/.test(nick) || password.length > 300 || /[\r\n\0]/.test(password))
+          return send({ type: 'error', message: 'Invalid IRC connection settings.' });
+        if ((ircConnectionsByUser.get(username) || 0) >= 3)
+          return send({ type: 'error', message: 'Limit reached: at most three IRC network connections per account.' });
+        ircConnectionsByUser.set(username, (ircConnectionsByUser.get(username) || 0) + 1);
+        connectionSlotReserved = true;
+        connecting = true;
+        try {
+          const resolved = await resolvePublicHost(host);
+          if (ws.readyState !== WebSocket.OPEN) {
+            releaseConnectionSlot();
+            return;
+          }
+          upstream = tlsConnect({
+            host: resolved.address,
+            port,
+            servername: resolved.host,
+            rejectUnauthorized: true
+          });
+          upstreamConnectTimeout = setTimeout(() => {
+            send({ type: 'error', message: 'IRC server connection timed out.' });
+            closeUpstream();
+          }, 30000);
+          upstream.on('secureConnect', () => {
+            if (upstreamConnectTimeout) clearTimeout(upstreamConnectTimeout);
+            upstreamConnectTimeout = null;
+            if (password) upstream.write(`PASS :${password}\r\n`);
+            upstream.write(`CAP LS 302\r\nNICK ${nick}\r\nUSER ${nick} 0 * :Un-Reader user\r\n`);
+            send({ type: 'state', state: 'connected' });
+          });
+          upstream.on('data', (chunk) => {
+            upstreamBuffer += chunk.toString('utf8');
+            if (Buffer.byteLength(upstreamBuffer) > 16384) {
+              send({ type: 'error', message: 'IRC server sent an oversized line.' });
+              closeUpstream();
+              return;
+            }
+            let newline;
+            while ((newline = upstreamBuffer.indexOf('\n')) >= 0) {
+              const line = upstreamBuffer.slice(0, newline).replace(/\r$/, '');
+              upstreamBuffer = upstreamBuffer.slice(newline + 1);
+              if (Buffer.byteLength(line) <= 510) send({ type: 'line', line });
+            }
+          });
+          upstream.on('error', (error) => {
+            send({ type: 'error', message: `IRC connection failed: ${error.code || 'network error'}` });
+            closeUpstream();
+          });
+          upstream.on('close', () => {
+            if (upstream) closeUpstream();
+            send({ type: 'state', state: 'disconnected' });
+            if (ws.readyState === WebSocket.OPEN) ws.close(1000, 'IRC disconnected');
+          });
+        } catch (error) {
+          closeUpstream();
+          send({ type: 'error', message: error.message || 'Could not connect to that IRC server.' });
+        } finally {
+          connecting = false;
+        }
+        return;
+      }
+      if (data.type === 'disconnect') {
+        if (upstream && upstream.writable) upstream.end('QUIT :Leaving\r\n');
+        else ws.close(1000, 'Disconnected');
+        return;
+      }
+      if (data.type === 'send') {
+        const line = typeof data.line === 'string' ? data.line : '';
+        if (!upstream || !upstream.writable || !line || Buffer.byteLength(line) > 510 || /[\r\n\0]/.test(line))
+          return send({ type: 'error', message: 'Invalid IRC command.' });
+        const command = line.split(' ', 1)[0].toUpperCase();
+        if (!['CAP', 'NICK', 'USER', 'PASS', 'PONG', 'JOIN', 'PART', 'PRIVMSG', 'NOTICE', 'QUIT', 'TOPIC', 'NAMES', 'WHOIS', 'INVITE', 'KICK', 'MODE', 'LIST', 'WHO', 'AWAY'].includes(command))
+          return send({ type: 'error', message: 'That IRC command is not supported by this client.' });
+        const now = Date.now();
+        while (sentAt.length && now - sentAt[0] >= 5000) sentAt.shift();
+        if (sentAt.length >= 20) return send({ type: 'error', message: 'Slow down before sending more IRC commands.' });
+        sentAt.push(now);
+        if (command === 'QUIT') upstream.end(`${line}\r\n`);
+        else upstream.write(`${line}\r\n`);
+      }
+    } catch (error) {
+      if (!authenticated) {
+        send({ type: 'error', message: error.name === 'JsonWebTokenError' || error.name === 'TokenExpiredError' ? 'Sign in again.' : 'Could not verify your Un-Reader session.' });
+        ws.close(4001, 'Authentication failed');
+        return;
+      }
+      send({ type: 'error', message: error.name === 'JsonWebTokenError' ? 'Sign in again.' : (error.message || 'Invalid IRC request.') });
+    }
+  });
+  ws.on('close', () => {
+    clearTimeout(authTimeout);
+    closeUpstream();
+  });
+});
 
 const WS_HEARTBEAT_MS = Number(process.env.WS_HEARTBEAT_MS || 30000);
 const heartbeatTimer = setInterval(() => {
+  ircWss.clients.forEach((client) => {
+    if (client.isAlive === false) return client.terminate();
+    client.isAlive = false;
+    try {
+      client.ping();
+    } catch {
+      client.terminate();
+    }
+  });
   activeClients.forEach((client, username) => {
     if (client.ws.isAlive === false) {
       log(`WS heartbeat timeout: ${username}`);

@@ -5,44 +5,45 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="description" content="Search and read song lyrics from LRCLIB.">
   <title>Un-Reader Lyrics</title>
+  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="bbs.css">
+  <link rel="shortcut icon" href="favicon.ico" type="image/x-icon">
+  <script src="common.js"></script>
   <style>
     * { box-sizing: border-box; transition: none !important; animation: none !important; }
-    body { margin: 0; padding: 8px; color: #000; background: #e5e5e5; font-family: Arial, Verdana, sans-serif; }
-    .window { width: 100%; max-width: 760px; min-height: 90vh; margin: 0 auto; border: 2px solid #000; background: #fff; box-shadow: 4px 4px 0 #000; }
-    .title-bar { position: relative; min-height: 42px; display: flex; align-items: center; justify-content: center; border-bottom: 2px solid #000; padding: 4px; }
-    .stripes { position: absolute; top: 7px; right: 7px; bottom: 7px; left: 7px; background: repeating-linear-gradient(to bottom, #000 0, #000 2px, #fff 2px, #fff 4px); }
-    .title { position: relative; z-index: 1; padding: 0 10px; background: #fff; font-weight: bold; }
-    .home { position: absolute; z-index: 2; left: 8px; top: 6px; min-height: 28px; padding: 4px 8px; border: 2px solid #000; box-shadow: 2px 2px 0 #000; color: #000; background: #fff; font: bold 12px Arial, sans-serif; text-decoration: none; }
-    main { padding: 12px; }
+    .window { min-height: 0; }
+    .title-bar { flex-shrink: 0; }
+    #back-btn { text-decoration: none; color: var(--text-color); }
+    main { flex: 1; min-height: 0; width: 100%; padding: 8px; overflow-y: auto; }
     .intro { margin: 0 0 12px; font-size: 13px; }
     label { display: block; margin: 8px 0 4px; font-size: 12px; font-weight: bold; }
     .search-row { display: flex; align-items: stretch; }
-    input, button { min-height: 48px; border: 2px solid #000; border-radius: 0; font: 14px Arial, sans-serif; }
+    input, button { min-height: 40px; border: var(--border); border-radius: 0; font: 14px Arial, sans-serif; }
     input { flex: 1; min-width: 0; padding: 8px; }
-    button { padding: 6px 12px; color: #000; background: #fff; box-shadow: 2px 2px 0 #000; font-weight: bold; cursor: pointer; }
+    button { padding: 6px 12px; color: var(--text-color); background: var(--bg-color); box-shadow: 2px 2px 0 var(--text-color); font-weight: bold; cursor: pointer; }
     .search-row button { margin-left: 8px; }
-    button:disabled { color: #666; box-shadow: none; }
-    button:active:not(:disabled) { color: #fff; background: #000; }
+    button:disabled { opacity: .55; box-shadow: none; }
+    button:active:not(:disabled) { color: var(--bg-color); background: var(--text-color); }
     #status { min-height: 22px; margin: 10px 0; font-size: 12px; }
     #results { margin: 0; padding: 0; list-style: none; }
     .result { margin: 0 0 8px; }
     .result button { display: block; width: 100%; text-align: left; }
     .result-title { display: block; margin-bottom: 3px; }
     .result-meta { display: block; font-size: 12px; font-weight: normal; }
-    #reader { margin-top: 14px; border: 2px solid #000; box-shadow: 2px 2px 0 #aaa; }
+    #reader { margin-top: 14px; border: var(--border); box-shadow: 2px 2px 0 var(--text-color); }
     #reader[hidden] { display: none; }
-    .reader-head { padding: 10px; border-bottom: 1px solid #000; }
+    .reader-head { padding: 10px; border-bottom: var(--border); }
     .reader-head h2 { margin: 0 0 4px; font-size: 17px; }
     .reader-meta { font-size: 12px; }
     #back-to-results { min-height: 40px; margin-top: 8px; }
     .lyric-controls { padding: 8px 10px 0; }
     .lyric-controls button { min-height: 40px; margin: 0 6px 4px 0; }
-    .lyric-controls button[aria-pressed="true"] { color: #fff; background: #000; }
+    .lyric-controls button[aria-pressed="true"] { color: var(--bg-color); background: var(--text-color); }
     #lyrics { margin: 0; padding: 12px; white-space: pre-wrap; overflow-wrap: break-word; word-wrap: break-word; font: 14px/1.5 Arial, Verdana, sans-serif; }
     .credit { margin: 12px 0 0; font-size: 11px; }
-    .credit a { color: #000; }
+    .credit a { color: var(--text-color); }
     @media (max-width: 420px) {
-      .title { margin-left: 72px; font-size: 13px; }
+      .title-text { margin-left: 72px; font-size: 13px; }
       .search-row { display: block; }
       .search-row button { width: 100%; margin: 8px 0 0; }
     }
@@ -51,17 +52,17 @@
 <body>
   <div class="window">
     <header class="title-bar">
-      <div class="stripes" aria-hidden="true"></div>
-      <a class="home" href="index.html">&lt; HOME</a>
-      <div class="title">LYRICS</div>
+      <div class="title-stripes" aria-hidden="true"></div>
+      <a id="back-btn" class="paper-btn" href="index.html">◀ HOME</a>
+      <div class="title-text">LYRICS</div>
     </header>
     <main>
       <p class="intro">Search song titles, artists, or albums, then choose a result to read its lyrics.</p>
       <form id="search-form">
         <label for="search-query">Song or artist</label>
         <div class="search-row">
-          <input id="search-query" type="search" maxlength="160" autocomplete="off" required>
-          <button id="search-button" type="submit">SEARCH</button>
+          <input class="paper-input" id="search-query" type="search" maxlength="160" autocomplete="off" required>
+          <button class="paper-btn shadow" id="search-button" type="submit">SEARCH</button>
         </div>
       </form>
       <div id="status" role="status" aria-live="polite">Search lyrics from LRCLIB.</div>
@@ -69,11 +70,11 @@
         <div class="reader-head">
           <h2 id="track-title"></h2>
           <div id="track-meta" class="reader-meta"></div>
-          <button id="back-to-results" type="button">BACK TO RESULTS</button>
+          <button class="paper-btn shadow" id="back-to-results" type="button">BACK TO RESULTS</button>
         </div>
         <div class="lyric-controls" aria-label="Lyrics format">
-          <button id="plain-button" type="button" aria-pressed="true">PLAIN</button>
-          <button id="synced-button" type="button" aria-pressed="false">SYNCED</button>
+          <button class="paper-btn shadow" id="plain-button" type="button" aria-pressed="true">PLAIN</button>
+          <button class="paper-btn shadow" id="synced-button" type="button" aria-pressed="false">SYNCED</button>
         </div>
         <pre id="lyrics"></pre>
       </section>
@@ -144,6 +145,7 @@
         title.textContent = record.trackName || record.name || 'Untitled track';
         meta.textContent = (record.artistName || 'Unknown artist') + (record.instrumental ? ' - instrumental' : record.syncedLyrics ? ' - synced lyrics' : ' - plain lyrics');
         button.type = 'button';
+        button.className = 'paper-btn shadow';
         button.appendChild(title);
         button.appendChild(meta);
         button.onclick = function () { openRecord(record); };

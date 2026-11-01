@@ -9,42 +9,27 @@
     <link rel="stylesheet" href="bbs.css" />
     <script src="common.js"></script>
     <style>
-      * {
-        margin: 0;
-        padding: 0;
-      }
-      html,
-      body {
-        width: 100%;
-        height: 100%;
-        overflow-y: hidden;
-      }
-      iframe {
-        width: 100%;
-        height: 100%;
-      }
+      * { box-sizing: border-box; transition: none !important; animation: none !important; }
+      html, body { width: 100%; height: 100%; overflow: hidden; }
+      body { align-items: stretch; justify-content: stretch; }
+      .window { min-height: 0; }
+      .title-bar { flex-shrink: 0; }
+      #back-btn { text-decoration: none; color: var(--text-color); }
+      main { display: flex; flex: 1; min-width: 0; min-height: 0; width: 100%; overflow: hidden; }
+      iframe { display: block; flex: 1; width: 100%; height: 100%; min-width: 0; min-height: 0; border: 0; background: var(--bg-color); }
     </style>
   </head>
   <body>
-    <iframe src="https://readium.ink/" frameborder="0"></iframe>
-    <script>startRichPresence('readium');</script>
-    <div
-      class="paper-btn"
-      onclick="window.location.href = 'index.html'"
-      style="
-        position: absolute;
-        top: 0px;
-        left: 0px;
-        z-index: 50;
-        border-top: none;
-        border-left: none;
-        border-bottom-right-radius: 10px;
-        padding: 1ex;
-        font-size: 14px;
-        font-family: 'Times New Roman', Times, serif;
-      "
-    >
-      Back
+    <div class="window">
+      <header class="title-bar">
+        <div class="title-stripes" aria-hidden="true"></div>
+        <a id="back-btn" class="paper-btn" href="index.html">◀ HOME</a>
+        <div class="title-text">READIUM!</div>
+      </header>
+      <main>
+        <iframe src="https://readium.ink/" title="Readium!"></iframe>
+      </main>
     </div>
+    <script>startRichPresence('readium');</script>
   </body>
 </html>

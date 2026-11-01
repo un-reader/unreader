@@ -1,0 +1,441 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>IRC — Un-Reader</title>
+  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="bbs.css">
+  <link rel="shortcut icon" href="favicon.ico" type="image/x-icon">
+  <script src="common.js"></script>
+  <style>
+    * { box-sizing: border-box; }
+    .window { min-height: 0; }
+    .title-bar { flex-shrink: 0; }
+    #back-btn { text-decoration: none; color: var(--text-color); }
+    #disconnect { position: absolute; right: 10px; z-index: 2; }
+    main { flex: 1; min-height: 0; width: 100%; max-width: none; margin: 0; padding: 8px; overflow-y: auto; }
+    button, input, select { min-height: 40px; border: var(--border); border-radius: 0; background: var(--bg-color); color: var(--text-color); padding: 8px; font: inherit; }
+    button { font-weight: bold; cursor: pointer; }
+    button.paper-btn { box-shadow: 2px 2px 0 var(--text-color); }
+    button:disabled { opacity: .5; }
+    .help { font-size: 13px; line-height: 1.4; }
+    .connection { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 7px; }
+    .connection input, .connection select { min-width: 0; width: 100%; }
+    #network { grid-column: span 2; }
+    #server { grid-column: span 2; }
+    #status { min-height: 24px; margin: 9px 0; }
+    #topic { min-height: 32px; padding: 6px 8px; border: 1px solid var(--text-color); overflow-wrap: anywhere; }
+    #channel-tabs { display: flex; gap: 5px; overflow-x: auto; margin: 8px 0 0; }
+    .tab { white-space: nowrap; }
+    .tab.active { background: var(--text-color); color: var(--bg-color); }
+    #workspace { display: grid; grid-template-columns: minmax(0, 1fr) 190px; border: var(--border); min-height: 0; }
+    #transcript { height: 56vh; max-height: 560px; min-height: 260px; overflow-y: auto; padding: 8px; overflow-wrap: anywhere; }
+    .line { margin: 0 0 6px; white-space: pre-wrap; }
+    .line.system { color: #555; }
+    body.dark-mode .line.system { color: #bbb; }
+    #users { border-left: var(--border); padding: 8px; overflow-y: auto; max-height: 56vh; }
+    #users h2 { margin: 0 0 8px; font-size: 14px; }
+    .user { display: block; width: 100%; min-height: 30px; border: 0; border-bottom: 1px solid var(--text-color); text-align: left; padding: 5px 2px; overflow-wrap: anywhere; box-shadow: none !important; }
+    form { display: flex; gap: 8px; margin-top: 8px; }
+    form input { flex: 1; min-width: 0; }
+    @media (max-width: 760px) { .connection { grid-template-columns: repeat(2, minmax(0, 1fr)); } #network, #server { grid-column: span 2; } #workspace { grid-template-columns: minmax(0, 1fr) 120px; } }
+    @media (max-width: 480px) { #workspace { grid-template-columns: 1fr; } #users { max-height: 140px; border-left: 0; border-top: 2px solid; } }
+  </style>
+</head>
+<body>
+  <div class="window">
+    <header class="title-bar">
+      <div class="title-stripes" aria-hidden="true"></div>
+      <a id="back-btn" class="paper-btn" href="index.html">◀ HOME</a>
+      <div class="title-text">IRC CLIENT</div>
+      <button id="disconnect" class="paper-btn" type="button" disabled>DISCONNECT</button>
+    </header>
+  <main>
+    <p class="help">Connect to any public IRC network that supports TLS. Enter its server hostname, a supported TLS port (6665–6669, 6697, 7000, or 7070), your nickname, and an optional channel. The presets are examples; choose Custom network for any other server. This client never falls back to plaintext. Messages pass through Un-Reader’s TLS bridge and chat history stays in page memory. The IRC network sees the bridge server’s IP, not your device’s IP; other users may see the host or cloak that network assigns. Server passwords are used for this connection only.</p>
+    <div class="connection">
+      <select class="paper-input" id="network" aria-label="Network preset">
+        <option value="custom">Custom network</option>
+        <option value="libera">Libera.Chat</option>
+        <option value="mint-help">Example: Linux Mint Help — SpotChat</option>
+        <option value="mint-chat">Example: Linux Mint Chat — SpotChat</option>
+      </select>
+      <input class="paper-input" id="server" type="text" value="" placeholder="IRC server hostname" aria-label="IRC server hostname" autocomplete="off">
+      <input class="paper-input" id="port" type="number" value="6697" aria-label="TLS port">
+      <input class="paper-input" id="nick" maxlength="30" placeholder="Nickname" aria-label="Nickname" autocomplete="nickname">
+      <input class="paper-input" id="server-password" type="password" maxlength="300" placeholder="Server password (optional)" aria-label="IRC server password" autocomplete="off">
+      <input class="paper-input" id="channel" maxlength="200" value="" placeholder="#channel (optional)" aria-label="Channel">
+      <button class="paper-btn shadow" id="connect" type="button">CONNECT</button>
+    </div>
+    <div id="status" role="status" aria-live="polite">Disconnected</div>
+    <div id="topic" aria-live="polite">Channel topic will appear here.</div>
+    <nav id="channel-tabs" aria-label="IRC conversations"></nav>
+    <div id="workspace">
+      <div id="transcript" aria-live="polite" aria-label="IRC messages"></div>
+      <aside id="users"><h2>USERS</h2><div id="user-list">Join a channel to see its users.</div></aside>
+    </div>
+    <form id="message-form">
+      <input class="paper-input" id="message" maxlength="400" placeholder="Message or /command" aria-label="Message or IRC command" autocomplete="off" disabled>
+      <button class="paper-btn shadow" id="send" type="submit" disabled>SEND</button>
+    </form>
+    <p class="help">Commands: <code>/join #channel</code>, <code>/part</code>, <code>/nick name</code>, <code>/msg nick text</code>, <code>/query nick</code>, <code>/me action</code>, <code>/topic text</code>, <code>/names</code>, <code>/whois nick</code>, <code>/invite nick</code>, <code>/kick nick [reason]</code>, <code>/away message</code>, <code>/quit</code>. Click a name in the user list to open a private message.</p>
+  </main>
+  </div>
+  <script>
+    (function () {
+      var socket = null;
+      var token = localStorage.getItem('token') || '';
+      var activeNick = '';
+      var activeTarget = '*status*';
+      var wantedChannel = '';
+      var channelTypes = '#&+!';
+      var userPrefixSymbols = '~&@%+';
+      var serverPassword = '';
+      var ircTransportConnected = false;
+      var connectionError = '';
+      var rooms = {};
+      var status = document.getElementById('status');
+      var transcript = document.getElementById('transcript');
+      var tabs = document.getElementById('channel-tabs');
+      var messageInput = document.getElementById('message');
+      var userList = document.getElementById('user-list');
+
+      function key(name) { return String(name || '*status*').toLowerCase(); }
+      function isChannel(name) { return !!name && channelTypes.indexOf(name.charAt(0)) >= 0; }
+      function validChannel(name) { return isChannel(name) && name.length <= 200 && !/[\s,]/.test(name); }
+      function stripUserPrefixes(nick) {
+        var i = 0;
+        while (i < nick.length && userPrefixSymbols.indexOf(nick.charAt(i)) >= 0) i++;
+        return nick.slice(i);
+      }
+      function room(name, kind) {
+        var id = key(name);
+        if (!rooms[id]) rooms[id] = { name: name || 'Status', kind: kind || 'status', messages: [], users: [], topic: '', unread: 0 };
+        return rooms[id];
+      }
+      room('*status*', 'status');
+
+      function showRoom(name) {
+        var current = room(name, name === '*status*' ? 'status' : (isChannel(name) ? 'channel' : 'private'));
+        activeTarget = key(name);
+        current.unread = 0;
+        tabs.textContent = '';
+        Object.keys(rooms).forEach(function (id) {
+          var item = rooms[id];
+          var button = document.createElement('button');
+          button.type = 'button';
+          button.className = 'paper-btn shadow tab' + (id === activeTarget ? ' active' : '');
+          button.textContent = item.name + (item.unread ? ' (' + item.unread + ')' : '');
+          button.addEventListener('click', function () { showRoom(item.name === 'Status' ? '*status*' : item.name); });
+          tabs.appendChild(button);
+        });
+        transcript.textContent = '';
+        current.messages.forEach(function (message) {
+          var row = document.createElement('div');
+          row.className = 'line' + (message.system ? ' system' : '');
+          row.textContent = message.text;
+          transcript.appendChild(row);
+        });
+        transcript.scrollTop = transcript.scrollHeight;
+        document.getElementById('topic').textContent = current.topic || (current.kind === 'channel' ? 'No topic is set.' : current.name);
+        renderUsers(current);
+      }
+
+      function renderUsers(current) {
+        userList.textContent = '';
+        if (current.kind !== 'channel' || !current.users.length) {
+          userList.textContent = current.kind === 'channel' ? 'Waiting for the user list…' : 'Join a channel to see its users.';
+          return;
+        }
+        current.users.slice().sort(function (a, b) { return a.localeCompare(b); }).forEach(function (nick) {
+          var button = document.createElement('button');
+          button.type = 'button';
+          button.className = 'user paper-btn';
+          button.textContent = nick;
+          button.title = 'Open a private conversation with ' + nick;
+          button.addEventListener('click', function () { showRoom(nick); });
+          userList.appendChild(button);
+        });
+      }
+
+      function line(text, system, target) {
+        var roomName = target || '*status*';
+        var roomKind = roomName === '*status*' ? 'status' : (isChannel(roomName) ? 'channel' : 'private');
+        var current = room(roomName, roomKind);
+        current.messages.push({ text: text, system: !!system });
+        if (current.messages.length > 500) current.messages.shift();
+        if (key(target || '*status*') === activeTarget) showRoom(current.name === 'Status' ? '*status*' : current.name);
+        else {
+          current.unread++;
+          showRoom(activeTarget === '*status*' ? '*status*' : rooms[activeTarget].name);
+        }
+      }
+
+      function sendPacket(data) {
+        if (socket && socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(data));
+      }
+      function sendRaw(command) { sendPacket({ type: 'send', line: command }); }
+      function parseLine(raw) {
+        var rest = raw;
+        var prefix = '';
+        if (rest.charAt(0) === '@') {
+          var tagEnd = rest.indexOf(' ');
+          if (tagEnd < 0) return;
+          rest = rest.slice(tagEnd + 1);
+        }
+        if (rest.charAt(0) === ':') {
+          var split = rest.indexOf(' ');
+          if (split < 0) return;
+          prefix = rest.slice(1, split);
+          rest = rest.slice(split + 1);
+        }
+        var trailing = '';
+        var trailingAt = rest.indexOf(' :');
+        if (trailingAt >= 0) {
+          trailing = rest.slice(trailingAt + 2);
+          rest = rest.slice(0, trailingAt);
+        }
+        var parts = rest.split(/ +/);
+        var command = (parts.shift() || '').toUpperCase();
+        var params = parts.concat(trailingAt >= 0 ? [trailing] : []);
+        var sender = prefix.split('!')[0] || '';
+        if (command === 'PING') return sendRaw('PONG :' + (params[params.length - 1] || ''));
+        if (command === 'CAP') { sendRaw('CAP END'); return; }
+        if (command === '421' && params[1] === 'CAP') { sendRaw('CAP END'); return; }
+        if (command === '005') {
+          params.slice(1, -1).forEach(function (feature) {
+            if (feature.slice(0, 10) === 'CHANTYPES=') channelTypes = feature.slice(10);
+            var prefix = feature.match(/^PREFIX=\([^)]*\)(.*)$/);
+            if (prefix) userPrefixSymbols = prefix[1];
+          });
+          return;
+        }
+        if (command === '001') {
+          activeNick = params[0] || activeNick;
+          status.textContent = 'Connected as ' + activeNick;
+          if (wantedChannel) sendRaw('JOIN ' + wantedChannel);
+          return line('Connected as ' + activeNick, true);
+        }
+        if (command === '332' && params.length >= 3) {
+          room(params[1], 'channel').topic = params[2];
+          if (key(params[1]) === activeTarget) showRoom(params[1]);
+          return;
+        }
+        if (command === '353' && params.length >= 4) {
+          var channel = params[2];
+          var members = params[3].split(/\s+/).map(stripUserPrefixes).filter(Boolean);
+          var listedUsers = room(channel, 'channel').users;
+          members.forEach(function (member) {
+            if (!listedUsers.some(function (existing) { return existing.toLowerCase() === member.toLowerCase(); })) listedUsers.push(member);
+          });
+          if (key(channel) === activeTarget) showRoom(channel);
+          return;
+        }
+        if (command === '366' && params[1]) {
+          var listedRoom = room(params[1], 'channel');
+          if (key(params[1]) === activeTarget) showRoom(params[1]);
+          return line('User list received (' + listedRoom.users.length + '). IRC usually shows messages sent after you join; older history depends on server support.', true, params[1]);
+        }
+        if (command === 'PRIVMSG' && params.length >= 2) {
+          var target = params[0];
+          var message = params[1];
+          var privateTarget = isChannel(target) ? target : (sender.toLowerCase() === activeNick.toLowerCase() ? target : sender);
+          var content = message.slice(0, 8) === '\u0001ACTION ' && message.slice(-1) === '\u0001'
+            ? '* ' + sender + ' ' + message.slice(8, -1)
+            : '<' + sender + '> ' + message;
+          return line(content, false, privateTarget);
+        }
+        if (command === 'NOTICE' && params.length >= 2) return line('-' + sender + '- ' + params[1], false, isChannel(params[0]) ? params[0] : '*status*');
+        if (command === 'JOIN' && prefix) {
+          var joined = params[0] || '';
+          var joinedRoom = room(joined, 'channel');
+          if (sender.toLowerCase() === activeNick.toLowerCase()) { activeTarget = key(joined); joinedRoom.users.push(activeNick); showRoom(joined); }
+          else if (joinedRoom.users.indexOf(sender) < 0) joinedRoom.users.push(sender);
+          return line(sender + ' joined ' + joined, true, joined);
+        }
+        if (command === 'PART' && prefix) {
+          var parted = room(params[0], 'channel');
+          parted.users = parted.users.filter(function (name) { return name.toLowerCase() !== sender.toLowerCase(); });
+          var selfParted = sender.toLowerCase() === activeNick.toLowerCase();
+          line(sender + ' left ' + (params[0] || ''), true, params[0]);
+          if (selfParted) { delete rooms[key(params[0])]; showRoom('*status*'); }
+          return;
+        }
+        if (command === 'NICK' && prefix) {
+          var nextNick = params[0] || '';
+          Object.keys(rooms).forEach(function (id) {
+            rooms[id].users = rooms[id].users.map(function (name) { return name.toLowerCase() === sender.toLowerCase() ? nextNick : name; });
+          });
+          if (sender.toLowerCase() === activeNick.toLowerCase()) activeNick = nextNick;
+          return line(sender + ' is now known as ' + nextNick, true, '*status*');
+        }
+        if (command === 'QUIT' && prefix) {
+          Object.keys(rooms).forEach(function (id) { rooms[id].users = rooms[id].users.filter(function (name) { return name.toLowerCase() !== sender.toLowerCase(); }); });
+          return line(sender + ' disconnected' + (params[0] ? ': ' + params[0] : ''), true);
+        }
+        if (command === 'TOPIC' && prefix && params[0]) {
+          room(params[0], 'channel').topic = params[1] || '(topic cleared)';
+          return line(sender + ' changed the topic: ' + (params[1] || '(cleared)'), true, params[0]);
+        }
+        if (command === 'KICK' && params.length >= 2) {
+          var kickedRoom = room(params[0], 'channel');
+          kickedRoom.users = kickedRoom.users.filter(function (name) { return name.toLowerCase() !== params[1].toLowerCase(); });
+          var selfKicked = params[1].toLowerCase() === activeNick.toLowerCase();
+          line(params[1] + ' was kicked by ' + sender + (params[2] ? ': ' + params[2] : ''), true, params[0]);
+          if (selfKicked) { delete rooms[key(params[0])]; showRoom('*status*'); }
+          return;
+        }
+        if (command === '433') return line('Nickname is already in use. Choose another nickname.', true);
+        if (/^\d{3}$/.test(command) && params.length) {
+          var numericMessage = params[params.length - 1];
+          if (command !== '353' && command !== '366') line(numericMessage, true);
+        }
+        if (command === 'ERROR') status.textContent = params[0] || 'IRC server closed the connection.';
+      }
+
+      document.getElementById('network').addEventListener('change', function () {
+        var preset = this.value;
+        if (preset === 'mint-help' || preset === 'mint-chat') {
+          document.getElementById('server').value = 'irc.spotchat.org';
+          document.getElementById('port').value = '6697';
+          document.getElementById('channel').value = preset === 'mint-help' ? '#linuxmint-help' : '#linuxmint-chat';
+        } else if (preset === 'libera') {
+          document.getElementById('server').value = 'irc.libera.chat';
+          document.getElementById('port').value = '6697';
+          document.getElementById('channel').value = '#libera';
+        } else {
+          document.getElementById('server').value = '';
+          document.getElementById('port').value = '6697';
+          document.getElementById('channel').value = '';
+        }
+      });
+
+      document.getElementById('connect').addEventListener('click', function () {
+        if (socket && socket.readyState < WebSocket.CLOSING) socket.close();
+        token = localStorage.getItem('token') || '';
+        var host = document.getElementById('server').value.trim();
+        var port = Number(document.getElementById('port').value);
+        activeNick = document.getElementById('nick').value.trim();
+        serverPassword = document.getElementById('server-password').value;
+        document.getElementById('server-password').value = '';
+        wantedChannel = document.getElementById('channel').value.trim();
+        if (!token) { status.textContent = 'Log in to Un-Reader before connecting.'; return; }
+        if (!/^[a-zA-Z0-9.-]{1,253}$/.test(host) || ![6665, 6666, 6667, 6668, 6669, 6697, 7000, 7070].includes(port) ||
+            !/^[A-Za-z0-9_\-\[\]{}^`|]{1,30}$/.test(activeNick) || serverPassword.length > 300 ||
+            (wantedChannel && !validChannel(wantedChannel))) {
+          status.textContent = 'Enter a valid public server, TLS port, nickname, and optional channel.';
+          return;
+        }
+        rooms = {};
+        channelTypes = '#&+!';
+        userPrefixSymbols = '~&@%+';
+        room('*status*', 'status');
+        showRoom('*status*');
+        activeTarget = '*status*';
+        ircTransportConnected = false;
+        connectionError = '';
+        status.textContent = 'Connecting…';
+        var wsUrl = (typeof WS_URL === 'string' ? WS_URL : '').replace(/\/+$/, '') + '/irc';
+        var connection;
+        try { connection = new WebSocket(wsUrl); socket = connection; }
+        catch (error) { status.textContent = error.message; return; }
+        document.getElementById('connect').disabled = true;
+        document.getElementById('disconnect').disabled = false;
+        connection.onopen = function () {
+          if (socket !== connection) return;
+          sendPacket({ type: 'auth', token: token });
+        };
+        connection.onmessage = function (event) {
+          if (socket !== connection) return;
+          var packet;
+          try { packet = JSON.parse(event.data); } catch (_) { return; }
+          if (packet.type === 'auth-ok') {
+            sendPacket({ type: 'connect', host: host, port: port, nick: activeNick, password: serverPassword });
+            serverPassword = '';
+            document.getElementById('server-password').value = '';
+          } else if (packet.type === 'line') parseLine(packet.line || '');
+          else if (packet.type === 'state') {
+            ircTransportConnected = packet.state === 'connected';
+            status.textContent = packet.state === 'connected' ? 'TLS connected; registering with IRC…' : 'Disconnected from IRC network.';
+            if (packet.state === 'connected') { messageInput.disabled = false; document.getElementById('send').disabled = false; }
+          }
+          else if (packet.type === 'error') {
+            var errorMessage = packet.message || 'IRC connection error.';
+            line(errorMessage, true);
+            if (!ircTransportConnected) { connectionError = errorMessage; socket.close(); }
+            else status.textContent = errorMessage;
+          }
+        };
+        connection.onerror = function () { if (socket === connection) status.textContent = 'Connection failed. Check sign-in and server availability.'; };
+        connection.onclose = function () {
+          if (socket !== connection) return;
+          status.textContent = connectionError || 'Disconnected';
+          socket = null;
+          serverPassword = '';
+          ircTransportConnected = false;
+          messageInput.disabled = true;
+          document.getElementById('send').disabled = true;
+          document.getElementById('connect').disabled = false;
+          document.getElementById('disconnect').disabled = true;
+        };
+      });
+
+      document.getElementById('message-form').addEventListener('submit', function (event) {
+        event.preventDefault();
+        var text = messageInput.value.trim();
+        if (!text || !socket || socket.readyState !== WebSocket.OPEN) return;
+        var activeRoom = rooms[activeTarget];
+        var channel = activeRoom && activeRoom.kind === 'channel' ? activeRoom.name : '';
+        if (text.charAt(0) === '/') {
+          var match = text.match(/^\/(\S+)(?:\s+([\s\S]*))?$/);
+          if (!match) return;
+          var command = match[1].toLowerCase();
+          var args = match[2] || '';
+          if (command === 'join' && validChannel(args)) { room(args, 'channel'); sendRaw('JOIN ' + args); }
+          else if (command === 'part' && (channel || validChannel(args.split(/\s/)[0]))) {
+            var partParts = args.split(/\s+/); var partChannel = validChannel(partParts[0]) ? partParts.shift() : channel;
+            sendRaw('PART ' + partChannel + (partParts.length ? ' :' + partParts.join(' ') : ''));
+          }
+          else if (command === 'nick' && /^[A-Za-z0-9_\-\[\]{}^`|]{1,30}$/.test(args)) sendRaw('NICK ' + args);
+          else if ((command === 'msg' && args.indexOf(' ') > 0) || (command === 'query' && args.length > 0)) {
+            var cut = args.indexOf(' '); var target = cut < 0 ? args : args.slice(0, cut); var body = cut < 0 ? '' : args.slice(cut + 1);
+            if (command === 'query') body = '';
+            showRoom(target); if (body) {
+              sendRaw('PRIVMSG ' + target + ' :' + body);
+              line(target.toLowerCase() === 'nickserv' ? '[NickServ command sent]' : '<' + activeNick + '> ' + body, target.toLowerCase() === 'nickserv', target);
+            }
+          } else if (command === 'me' && channel && args) { sendRaw('PRIVMSG ' + channel + ' :\u0001ACTION ' + args + '\u0001'); line('* ' + activeNick + ' ' + args, false, channel); }
+          else if (command === 'topic' && channel) sendRaw('TOPIC ' + channel + (args ? ' :' + args : ''));
+          else if (command === 'names') sendRaw('NAMES ' + (args || channel));
+          else if (command === 'whois' && args) sendRaw('WHOIS ' + args.split(/\s/)[0]);
+          else if (command === 'invite' && args) {
+            var inviteParts = args.split(/\s+/); var inviteChannel = channel || inviteParts[1];
+            if (inviteChannel) sendRaw('INVITE ' + inviteParts[0] + ' ' + inviteChannel);
+            else line('Choose a channel first, or use /invite nick #channel.', true);
+          }
+          else if (command === 'kick' && channel && args) { var kickParts = args.split(/\s+/); sendRaw('KICK ' + channel + ' ' + kickParts[0] + (kickParts.length > 1 ? ' :' + kickParts.slice(1).join(' ') : '')); }
+          else if (command === 'ban' && channel && args) sendRaw('MODE ' + channel + ' +b ' + args.split(/\s/)[0]);
+          else if (command === 'notice' && args.indexOf(' ') > 0) { var noticeCut = args.indexOf(' '); sendRaw('NOTICE ' + args.slice(0, noticeCut) + ' :' + args.slice(noticeCut + 1)); }
+          else if (command === 'list') sendRaw('LIST ' + args);
+          else if (command === 'away') sendRaw(args ? 'AWAY :' + args : 'AWAY');
+          else if (command === 'quit') sendRaw('QUIT :' + (args || 'Leaving'));
+          else line('Unsupported command or command needs a channel/operator permission.', true);
+        } else if (channel) {
+          sendRaw('PRIVMSG ' + channel + ' :' + text);
+          line('<' + activeNick + '> ' + text, false, channel);
+        } else if (rooms[activeTarget] && rooms[activeTarget].kind === 'private') {
+          sendRaw('PRIVMSG ' + rooms[activeTarget].name + ' :' + text);
+          line('<' + activeNick + '> ' + text, false, rooms[activeTarget].name);
+        } else line('Join a channel or open a private conversation first.', true);
+        messageInput.value = '';
+      });
+
+      document.getElementById('disconnect').addEventListener('click', function () {
+        if (socket) sendPacket({ type: 'disconnect' });
+      });
+      window.addEventListener('pagehide', function () { serverPassword = ''; if (socket) socket.close(); });
+      showRoom('*status*');
+    }());
+  </script>
+</body>
+</html>
