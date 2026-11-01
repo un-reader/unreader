@@ -1077,7 +1077,7 @@ function censor(text) {
   ];
   for (let i = 0; i < curses.length; i++) {
     text = text.replace(
-      new RegExp(curses[i], 'gi'),
+      new RegExp('\\b' + curses[i] + '\\b', 'gi'),
       '█'.repeat(curses[i].length),
     );
   }
