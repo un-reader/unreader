@@ -36,6 +36,13 @@ export PORT=80
 node index.js
 ```
 
+To enable the server-side Cloudflare AI provider, also set `CLOUDFLARE_ACCOUNT_ID`
+and `CLOUDFLARE_API_TOKEN` in the server environment. The token must have the
+Cloudflare Workers AI `Read` permission. Set them in Render's service environment,
+Netlify's site environment variables, or your local `run.sh`, then restart/redeploy
+the server. A browser-side key or a key saved in Dashboard Settings is not used by
+the server Cloudflare provider.
+
 Now that all is set up, on your PC, go to 127.0.0.1:80 to test, if you used the same port as the example script.
 If you also want to test on your Kindle, make sure to keep port 80, since for some reason the browser rejects port numbers. Check your PC's local IP address, then go to that IP address on your Kindle.
 

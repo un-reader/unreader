@@ -486,8 +486,12 @@ const cloudflareAiUsage = new Map();
 app.post('/api/ai/cloudflare', authenticateToken, async (req, res) => {
   const accountId = process.env.CLOUDFLARE_ACCOUNT_ID;
   const apiToken = process.env.CLOUDFLARE_API_TOKEN;
-  if (!accountId || !apiToken)
-    return res.status(503).json({ error: 'Cloudflare AI is not configured on the server.' });
+  const missingConfig = [
+    !accountId && 'CLOUDFLARE_ACCOUNT_ID',
+    !apiToken && 'CLOUDFLARE_API_TOKEN',
+  ].filter(Boolean);
+  if (missingConfig.length)
+    return res.status(503).json({ error: `Cloudflare AI server configuration is missing: ${missingConfig.join(', ')}.` });
   if (!/^[a-f0-9]{32}$/i.test(accountId))
     return res.status(503).json({ error: 'Cloudflare account configuration is invalid.' });
   const messages = req.body?.messages;
