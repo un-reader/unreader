@@ -369,7 +369,7 @@
       <div class="setting-item">
         <div>
           <div class="setting-label">@system provider</div>
-          <div class="setting-desc">Choose Qwen, the server Cloudflare model, or your own provider key.</div>
+          <div class="setting-desc">Choose Qwen, a server-managed model, or use your own provider key from this browser.</div>
         </div>
         <select id="system-ai-provider" class="kindle-input" style="width:auto; min-width:190px;">
           <option value="qwen">Qwen (managed)</option>
@@ -383,6 +383,10 @@
       <div id="system-ai-key-settings" style="display:none; padding:8px 0;">
         <label for="system-ai-key" class="setting-label">Personal API key</label>
         <input id="system-ai-key" class="kindle-input" type="password" autocomplete="off" placeholder="Paste your provider key" />
+        <div id="system-ai-account-wrap" style="display:none;">
+          <label for="system-ai-account" class="setting-label">Cloudflare Account ID</label>
+          <input id="system-ai-account" class="kindle-input" type="text" autocomplete="off" placeholder="32-character account ID" />
+        </div>
         <label for="system-ai-model" class="setting-label">Model ID</label>
         <input id="system-ai-model" class="kindle-input" type="text" autocomplete="off" placeholder="Provider model ID" />
         <div id="system-ai-endpoint-wrap" style="display:none;">
@@ -604,8 +608,10 @@
     const aiKeySettings = document.getElementById('system-ai-key-settings');
     const aiModel = document.getElementById('system-ai-model');
     const aiEndpointWrap = document.getElementById('system-ai-endpoint-wrap');
+    const aiAccountWrap = document.getElementById('system-ai-account-wrap');
     const aiConfigKey = 'unreader-system-ai-config';
     const aiDefaults = {
+      cloudflare: { model: '@cf/qwen/qwen3.8-27b' },
       groq: { model: 'qwen/qwen3.8-27b' },
       openai: { model: 'gpt-4o-mini' },
       openrouter: { model: 'openai/gpt-oss-120b' },
@@ -616,13 +622,15 @@
     if (!aiConfig || typeof aiConfig !== 'object') aiConfig = {};
     if (['qwen', 'cloudflare', 'groq', 'openai', 'openrouter', 'custom'].includes(aiConfig.provider)) aiProvider.value = aiConfig.provider;
     document.getElementById('system-ai-key').value = aiConfig.key || '';
+    document.getElementById('system-ai-account').value = aiConfig.accountId || '';
     aiModel.value = aiConfig.model || (aiDefaults[aiProvider.value] || {}).model || '';
     document.getElementById('system-ai-endpoint').value = aiConfig.endpoint || '';
     let lastAIProvider = aiProvider.value;
     function updateAIProviderFields() {
-      const personal = ['groq', 'openai', 'openrouter', 'custom'].includes(aiProvider.value);
+      const personal = ['cloudflare', 'groq', 'openai', 'openrouter', 'custom'].includes(aiProvider.value);
       aiKeySettings.style.display = personal ? 'block' : 'none';
       aiEndpointWrap.style.display = aiProvider.value === 'custom' ? 'block' : 'none';
+      aiAccountWrap.style.display = aiProvider.value === 'cloudflare' ? 'block' : 'none';
       if (personal && aiProvider.value !== lastAIProvider) aiModel.value = (aiDefaults[aiProvider.value] || {}).model || '';
       lastAIProvider = aiProvider.value;
       if (!personal) {
@@ -635,18 +643,20 @@
     document.getElementById('system-ai-save').onclick = function () {
       const model = aiModel.value.trim();
       const key = document.getElementById('system-ai-key').value.trim();
+      const accountId = document.getElementById('system-ai-account').value.trim();
       const endpoint = document.getElementById('system-ai-endpoint').value.trim();
-      if (!key || !model || (aiProvider.value === 'custom' && !/^https:\/\//i.test(endpoint))) {
-        document.getElementById('system-ai-status').textContent = 'Enter a key and model; custom endpoints must use HTTPS.';
+      if (!key || !model || (aiProvider.value === 'cloudflare' && !/^[a-f0-9]{32}$/i.test(accountId)) || (aiProvider.value === 'custom' && !/^https:\/\//i.test(endpoint))) {
+        document.getElementById('system-ai-status').textContent = 'Enter a key and model; Cloudflare also needs a valid Account ID, and custom endpoints must use HTTPS.';
         return;
       }
-      aiConfig = { provider: aiProvider.value, key: key, model: model, endpoint: endpoint };
+      aiConfig = { provider: aiProvider.value, key: key, model: model, endpoint: endpoint, accountId: accountId };
       localStorage.setItem(aiConfigKey, JSON.stringify(aiConfig));
       document.getElementById('system-ai-status').textContent = 'Personal provider settings saved in this browser.';
     };
     document.getElementById('system-ai-clear').onclick = function () {
       localStorage.removeItem(aiConfigKey);
       document.getElementById('system-ai-key').value = '';
+      document.getElementById('system-ai-account').value = '';
       aiConfig = {};
       aiProvider.value = 'qwen';
       aiModel.value = '';

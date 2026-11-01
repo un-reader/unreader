@@ -495,6 +495,9 @@ app.post('/api/ai/cloudflare', authenticateToken, async (req, res) => {
   if (!/^[a-f0-9]{32}$/i.test(accountId))
     return res.status(503).json({ error: 'Cloudflare account configuration is invalid.' });
   const messages = req.body?.messages;
+  const assistant = req.body?.assistant;
+  if (assistant !== undefined && assistant !== 'help')
+    return res.status(400).json({ error: 'Choose a supported Cloudflare assistant.' });
   if (!Array.isArray(messages) || !messages.length || messages.length > 42 || messages.some((message) =>
     !message || !['system', 'user', 'assistant'].includes(message.role) ||
     typeof message.content !== 'string' || message.content.length > 20000
@@ -518,10 +521,17 @@ app.post('/api/ai/cloudflare', authenticateToken, async (req, res) => {
           'cf-aig-gateway-id': process.env.CLOUDFLARE_AI_GATEWAY_ID || 'default',
         },
         body: JSON.stringify({
-          model: '@cf/qwen/qwen3.8-27b',
+          model: assistant === 'help' ? '@cf/meta/llama-4-scout-17b-16e-instruct' : '@cf/qwen/qwen3.8-27b',
           messages,
-          max_tokens: 4096,
+          max_tokens: assistant === 'help' ? 1024 : 4096,
           temperature: 1,
+          ...(assistant === 'help' ? {
+            top_p: 1,
+            top_k: 50,
+            repetition_penalty: 1,
+            frequency_penalty: 0,
+            presence_penalty: 0,
+          } : {}),
         }),
         signal: AbortSignal.timeout(60000),
       },

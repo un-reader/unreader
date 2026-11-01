@@ -1038,6 +1038,18 @@
                 var text = input.value.trim();
                 if (!text || !socket || socket.readyState !== WebSocket.OPEN) return;
 
+                var helpCommand = /^@sHstEmLP_(?:\s|$)/i;
+                if (helpCommand.test(text)) {
+                    socket.send(JSON.stringify({
+                        type: currentMode === "public" ? "message" : "dm",
+                        content: text,
+                        target: currentTarget,
+                    }));
+                    input.value = "";
+                    processHelpAICore(currentMode, currentTarget, text);
+                    return;
+                }
+
                 // GLOBAL CHAT INTERCEPT: Checks for the @system keyword in both public and DMs
                 if (text.includes("@system")) {
                     log("Global decentralized AI intercept sequence triggered.");
@@ -1181,19 +1193,25 @@
                 return prompt;
             }
 
-            async function requestSystemAI(messages) {
+            async function requestSystemAI(messages, assistant) {
                 var config = {};
                 try { config = JSON.parse(localStorage.getItem("unreader-system-ai-config") || "{}"); } catch (e) {}
                 if (!config || typeof config !== "object") config = {};
                 var provider = config.provider || "qwen";
                 if (!["qwen", "cloudflare", "groq", "openai", "openrouter", "custom"].includes(provider)) provider = "qwen";
                 var url, model, headers = { "Content-Type": "application/json" };
-                var groqProvider = provider === "qwen" || provider === "groq";
-                if (provider === "cloudflare") {
+                var groqProvider = assistant !== "help" && (provider === "qwen" || provider === "groq");
+                if ((assistant === "help" || provider === "cloudflare") && provider === "cloudflare" && config.key) {
+                    if (!/^[a-f0-9]{32}$/i.test(config.accountId || "")) throw new Error("Enter your Cloudflare Account ID in Dashboard Settings.");
+                    url = "https://api.cloudflare.com/client/v4/accounts/" + config.accountId + "/ai/v1/chat/completions";
+                    headers.Authorization = "Bearer " + config.key;
+                    headers["cf-aig-gateway-id"] = "default";
+                    model = assistant === "help" ? "@cf/meta/llama-4-scout-17b-16e-instruct" : (config.model || "@cf/qwen/qwen3.8-27b");
+                } else if (assistant === "help" || provider === "cloudflare") {
                     if (!token) throw new Error("Log in to use the server Cloudflare provider.");
                     url = BACKEND_URL + "/api/ai/cloudflare";
                     headers.Authorization = "Bearer " + token;
-                    model = "@cf/qwen/qwen3.8-27b";
+                    model = assistant === "help" ? "@cf/meta/llama-4-scout-17b-16e-instruct" : "@cf/qwen/qwen3.8-27b";
                 } else if (provider === "qwen") {
                     url = "https://api.groq.com/openai/v1/chat/completions";
                     var qwenKeyPart1 = "gsk_uvNU2uCH91KUiWy";
@@ -1213,10 +1231,13 @@
                     if (provider === "custom" && !/^https:\/\//i.test(url)) throw new Error("Custom AI endpoints must use HTTPS.");
                     headers.Authorization = "Bearer " + config.key;
                 }
+                var requestBody = { messages: messages, model: model, max_tokens: assistant === "help" ? 1024 : 4096, temperature: 1, stream: false };
+                if (assistant === "help") Object.assign(requestBody, { top_p: 1, top_k: 50, repetition_penalty: 1, frequency_penalty: 0, presence_penalty: 0 });
+                if (url === BACKEND_URL + "/api/ai/cloudflare") requestBody.assistant = assistant;
                 var response = await fetch(url, {
                     method: "POST",
                     headers: headers,
-                    body: JSON.stringify({ messages: messages, model: model, max_tokens: 4096, temperature: 1, stream: false })
+                    body: JSON.stringify(requestBody)
                 });
                 var data = await response.json().catch(function () { return null; });
                 if (groqProvider && (response.status === 429 || response.status === 498)) {
@@ -1232,6 +1253,41 @@
                 var content = data && data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content;
                 if (typeof content !== "string" || !content.trim()) throw new Error("AI provider returned an empty response.");
                 return content.trim();
+            }
+
+            function glitchText(text, intensity = 0.25) {
+                const tokens = text.match(/[\p{L}\p{N}]+(?:['’][\p{L}]+)?|[^\p{L}\p{N}]+/gu) || [];
+                return tokens.map(function(token) {
+                    if (!/[\p{L}\p{N}]/u.test(token) || Math.random() > intensity) return token;
+                    const mode = Math.random();
+                    if (mode < 0.30) return token + token;
+                    if (mode < 0.75) return token + " " + token;
+                    const split = Math.max(1, Math.floor(token.length / 2));
+                    return token + token.slice(split);
+                }).join("");
+            }
+
+            async function processHelpAICore(mode, target, currentMessage) {
+                try {
+                    var messages = [{ role: "system", content: generateSystemPrompt() }, ...getCurrentPageConversation(currentMessage)];
+                    var answer = await requestSystemAI(messages, "help");
+                    answer = glitchText(answer, 0.45);
+                    if (socket && socket.readyState === WebSocket.OPEN) {
+                        socket.send(JSON.stringify({
+                            type: mode === "public" ? "message" : "dm",
+                            content: "\u200B[SYSTEM_BOT]\u200B" + answer,
+                            target: target,
+                        }));
+                    }
+                } catch (error) {
+                    if (socket && socket.readyState === WebSocket.OPEN) {
+                        socket.send(JSON.stringify({
+                            type: mode === "public" ? "message" : "dm",
+                            content: "\u200B[SYSTEM_BOT]\u200BHELP_ LINK CORRUPTED: " + error.message,
+                            target: target,
+                        }));
+                    }
+                }
             }
 
             // ---- DECENTRALIZED GLOBAL AI RUNNER (CLIENT-SIDE) ----
