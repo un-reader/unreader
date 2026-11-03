@@ -285,9 +285,11 @@ async function resolvePublicHost(host) {
 function validateMailRequest(body) {
   const protocol = body?.protocol;
   const action = body?.action;
+  const authType = body?.authType === 'oauth2' ? 'oauth2' : 'password';
   const port = Number(body?.port);
   const username = typeof body?.username === 'string' ? body.username.trim() : '';
   const password = typeof body?.password === 'string' ? body.password : '';
+  const accessToken = typeof body?.accessToken === 'string' ? body.accessToken : '';
   const mailbox = typeof body?.mailbox === 'string' ? body.mailbox.trim() : 'INBOX';
   const id = String(body?.id || '');
   const page = body?.page === undefined ? 0 : Number(body.page);
@@ -295,8 +297,10 @@ function validateMailRequest(body) {
     throw new Error('Choose IMAP or POP3 and a supported mail action.');
   if (port !== (protocol === 'imap' ? 993 : 995))
     throw new Error(`Use the secure ${protocol === 'imap' ? '993' : '995'} port.`);
-  if (!username || username.length > 320 || !password || password.length > 1024)
+  if (!username || username.length > 320 || (authType === 'password' && (!password || password.length > 1024)))
     throw new Error('Enter your mail username and password.');
+  if (authType === 'oauth2' && (protocol !== 'imap' || port !== 993 || String(body?.host).toLowerCase() !== 'outlook.office365.com' || !accessToken || accessToken.length > 8192))
+    throw new Error('Microsoft OAuth currently supports Outlook IMAP only.');
   if (body?.action === 'list' && (!Number.isSafeInteger(page) || page < 0 || page > 10000))
     throw new Error('Choose a valid mail page.');
   if (!mailbox || mailbox.length > 200 || /[\r\n\0]/.test(mailbox))
@@ -305,8 +309,74 @@ function validateMailRequest(body) {
     ? !/^[1-9]\d{0,9}$/.test(id)
     : !/^(?:uid:[!-~]{1,70}|num:[1-9]\d{0,9})$/.test(id)))
     throw new Error('Choose a valid message.');
-  return { protocol, action, port, username, password, mailbox, id, page };
+  return { protocol, action, port, username, password, accessToken, authType, mailbox, id, page };
 }
+
+const microsoftOAuthClientId = process.env.MICROSOFT_OAUTH_CLIENT_ID || '';
+const microsoftMailScopes = 'https://outlook.office.com/IMAP.AccessAsUser.All offline_access';
+
+async function microsoftOAuthRequest(data) {
+  if (!microsoftOAuthClientId) throw new Error('Not found.');
+  const response = await fetch('https://login.microsoftonline.com/common/oauth2/v2.0/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams(Object.assign({ client_id: microsoftOAuthClientId }, data))
+  });
+  const result = await response.json();
+  if (!response.ok) {
+    const error = new Error(result.error_description || result.error || 'Microsoft sign-in failed.');
+    error.code = result.error;
+    throw error;
+  }
+  return result;
+}
+
+app.get('/api/mail/oauth/status', (req, res) => {
+  res.set('Cache-Control', 'no-store').json({ enabled: !!microsoftOAuthClientId });
+});
+
+app.post('/api/mail/oauth/device-code', authenticateToken, async (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  if (!microsoftOAuthClientId) return res.status(404).json({ error: 'Not found.' });
+  try {
+    const response = await fetch('https://login.microsoftonline.com/common/oauth2/v2.0/devicecode', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ client_id: microsoftOAuthClientId, scope: microsoftMailScopes })
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error_description || result.error || 'Could not start Microsoft sign-in.');
+    res.json(result);
+  } catch (error) {
+    res.status(400).json({ error: String(error.message || 'Could not start Microsoft sign-in.').slice(0, 500) });
+  }
+});
+
+app.post('/api/mail/oauth/token', authenticateToken, async (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  const deviceCode = typeof req.body?.device_code === 'string' ? req.body.device_code : '';
+  if (!deviceCode || deviceCode.length > 4096) return res.status(400).json({ error: 'Invalid Microsoft device sign-in code.' });
+  try {
+    res.json(await microsoftOAuthRequest({
+      grant_type: 'urn:ietf:params:oauth:grant-type:device_code', device_code: deviceCode
+    }));
+  } catch (error) {
+    const message = String(error.message || 'Microsoft sign-in is pending.').slice(0, 500);
+    res.status(['authorization_pending', 'slow_down'].includes(error.code) ? 428 : 400)
+      .json({ error: message });
+  }
+});
+
+app.post('/api/mail/oauth/refresh', authenticateToken, async (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  const refreshToken = typeof req.body?.refresh_token === 'string' ? req.body.refresh_token : '';
+  if (!refreshToken || refreshToken.length > 16384) return res.status(400).json({ error: 'Microsoft sign-in expired. Sign in again.' });
+  try {
+    res.json(await microsoftOAuthRequest({ grant_type: 'refresh_token', refresh_token: refreshToken, scope: microsoftMailScopes }));
+  } catch (error) {
+    res.status(401).json({ error: String(error.message || 'Microsoft sign-in expired. Sign in again.').slice(0, 500) });
+  }
+});
 
 async function parseMailSource(source) {
   const parsed = await PostalMime.parse(source);
@@ -401,7 +471,9 @@ app.post('/api/mail/messages', authenticateToken, async (req, res) => {
         port: request.port,
         secure: true,
         tls: { servername: server.host },
-        auth: { user: request.username, pass: request.password },
+        auth: request.authType === 'oauth2'
+          ? { user: request.username, accessToken: request.accessToken }
+          : { user: request.username, pass: request.password },
         logger: false,
         connectionTimeout: 10000,
         greetingTimeout: 10000,

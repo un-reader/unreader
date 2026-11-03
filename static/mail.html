@@ -101,13 +101,14 @@
     <p class="hint">Connect using secure IMAP (port 993) or POP3 (port 995). Credentials saved to your Un-Reader account are encrypted with your PIN. You can also opt to remember them on this device for automatic sign-in. Mail credentials are sent to the Un-Reader server over HTTPS for each mail request.</p>
     <form id="connection">
       <label>Protocol<select class="paper-input" id="protocol"><option value="imap">IMAP</option><option value="pop3">POP3</option></select></label>
-      <label>Provider<select class="paper-input" id="provider"><option value="custom">Custom</option><option value="gmail">Gmail</option><option value="yahoo">Yahoo Mail</option><option value="outlook">Outlook.com</option><option value="icloud">iCloud Mail</option><option value="proton">Proton Mail (Bridge)</option></select></label>
+      <label>Provider<select class="paper-input" id="provider"><option value="custom">Custom</option><option value="gmail">Gmail</option><option value="yahoo">Yahoo Mail</option><option value="outlook" hidden>Outlook.com</option><option value="icloud">iCloud Mail</option><option value="proton">Proton Mail (Bridge)</option></select></label>
       <label>Mail server<input class="paper-input" id="host" type="text" placeholder="imap.example.com" autocomplete="off" required></label>
       <label>Secure port<input class="paper-input" id="port" type="number" min="993" max="995" value="993" required></label>
       <label>Username<input class="paper-input" id="username" type="text" autocomplete="username" required></label>
       <label>Password<input class="paper-input" id="password" type="password" autocomplete="current-password" required></label>
       <label id="mailbox-label">Mailbox<input class="paper-input" id="mailbox" type="text" value="INBOX" autocomplete="off"></label>
       <p id="provider-note" class="hint" role="status" aria-live="polite"></p>
+      <div id="outlook-oauth" hidden><button class="paper-btn shadow" id="microsoft-sign-in" type="button">SIGN IN WITH MICROSOFT</button> <a id="microsoft-verify-link" target="_blank" rel="noopener" hidden>Open Microsoft sign-in</a><p id="microsoft-oauth-status" class="hint" role="status" aria-live="polite"></p></div>
       <fieldset id="credential-vault">
         <legend>Saved mail credentials</legend>
         <p class="hint">Encrypted in this browser with your PIN; only ciphertext is uploaded. Your PIN never leaves this device.</p>
@@ -130,13 +131,13 @@
   <div id="help-overlay" role="dialog" aria-modal="true" aria-labelledby="help-title">
     <section id="help-panel">
       <header><strong id="help-title">MAIL SETUP HELP</strong><button id="close-help" class="paper-btn" type="button">CLOSE HELP</button></header>
-      <p>Choose IMAP or POP3, select a provider preset, then enter your full email address and provider-approved password. This app connects over secure IMAP port 993 or POP3 port 995. It currently uses password authentication; providers requiring OAuth sign-in may not work.</p>
+      <p>Choose IMAP or POP3, select a provider preset, then enter your full email address and provider-approved password. This app connects over secure IMAP port 993 or POP3 port 995.</p>
       <h3>Gmail</h3>
       <p>Enable the protocol you selected in Gmail’s <a href="https://mail.google.com/mail/u/0/#settings/fwdandpop" target="_blank" rel="noopener">Forwarding and POP/IMAP settings</a>. Use <code>imap.gmail.com:993</code> or <code>pop.gmail.com:995</code>. If Google rejects your regular password, use an <a href="https://myaccount.google.com/apppasswords" target="_blank" rel="noopener">App Password</a> (requires 2-Step Verification). OAuth sign-in is not supported by this app.</p>
       <h3>Yahoo Mail</h3>
       <p>Use <code>imap.mail.yahoo.com:993</code> or <code>pop.mail.yahoo.com:995</code>, your full email address, and a generated <a href="https://login.yahoo.com/account/security" target="_blank" rel="noopener">Yahoo app password</a>.</p>
       <h3>Outlook.com / Hotmail</h3>
-      <p>The server names are <code>outlook.office365.com</code> on port 993 (IMAP) or 995 (POP3). Microsoft requires OAuth2/Modern Auth for Outlook.com, which this client does not yet support, so password sign-in will fail. POP or IMAP access may also need to be enabled in Outlook settings.</p>
+      <p>Choose Outlook.com and press <strong>SIGN IN WITH MICROSOFT</strong>. The sign-in code is handled by Microsoft and used to connect over IMAP. POP3 sign-in is not supported. IMAP access may need to be enabled in Outlook settings.</p>
       <h3>iCloud Mail</h3>
       <p>iCloud supports IMAP only: <code>imap.mail.me.com:993</code>. Use an <a href="https://account.apple.com/" target="_blank" rel="noopener">Apple app-specific password</a>; POP3 is not available.</p>
       <h3>Proton Mail</h3>
@@ -160,6 +161,8 @@
       var backend = typeof BACKEND_URL === 'string' ? BACKEND_URL : '';
       var settingsOverlay = document.getElementById('connection-overlay');
       var helpOverlay = document.getElementById('help-overlay');
+      var microsoftTokens = null;
+      var microsoftOAuthEnabled = false;
 
       function setStatus(message) { status.textContent = message; }
       function showSettings() { settingsOverlay.classList.add('open'); }
@@ -178,6 +181,69 @@
       }
       function setVaultStatus(message) { document.getElementById('vault-status').textContent = message || ''; }
       function renderText(id, value) { document.getElementById(id).textContent = value || ''; }
+      function microsoftRequest(path, data) {
+        return fetch(backend + path, {
+          method: 'POST', cache: 'no-store',
+          headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+          body: JSON.stringify(data)
+        }).then(function (response) {
+          return response.json().then(function (result) {
+            if (!response.ok) {
+              var error = new Error(result.error || 'Microsoft sign-in failed.');
+              error.status = response.status;
+              throw error;
+            }
+            return result;
+          });
+        });
+      }
+      function refreshMicrosoftToken() {
+        if (!microsoftTokens || microsoftTokens.expiresAt > Date.now() + 60000) return Promise.resolve();
+        return microsoftRequest('/api/mail/oauth/refresh', { refresh_token: microsoftTokens.refresh_token }).then(function (result) {
+          microsoftTokens = Object.assign({}, result, {
+            refresh_token: result.refresh_token || microsoftTokens.refresh_token,
+            expiresAt: Date.now() + Number(result.expires_in || 3600) * 1000
+          });
+          session.accessToken = microsoftTokens.access_token;
+          session.refreshToken = microsoftTokens.refresh_token;
+        });
+      }
+      function startMicrosoftSignIn() {
+        if (!token) { document.getElementById('microsoft-oauth-status').textContent = 'Sign in to Un-Reader first.'; return; }
+        var button = document.getElementById('microsoft-sign-in');
+        var status = document.getElementById('microsoft-oauth-status');
+        var link = document.getElementById('microsoft-verify-link');
+        button.disabled = true;
+        link.hidden = true;
+        status.textContent = 'Starting Microsoft sign-in…';
+        microsoftRequest('/api/mail/oauth/device-code', {}).then(function (device) {
+          link.href = device.verification_uri || device.verification_url;
+          link.hidden = false;
+          status.textContent = device.message || ('Enter code ' + device.user_code + ' at ' + link.href);
+          var expiresAt = Date.now() + Number(device.expires_in || 900) * 1000;
+          var interval = Math.max(5, Number(device.interval || 5)) * 1000;
+          function poll() {
+            if (Date.now() >= expiresAt) {
+              status.textContent = 'Microsoft sign-in code expired. Start again.';
+              button.disabled = false;
+              return;
+            }
+            microsoftRequest('/api/mail/oauth/token', { device_code: device.device_code }).then(function (result) {
+              microsoftTokens = Object.assign({}, result, { expiresAt: Date.now() + Number(result.expires_in || 3600) * 1000 });
+              document.getElementById('password').value = '';
+              status.textContent = 'Microsoft account authorized. Enter your Outlook email address, then press CONNECT / REFRESH.';
+              button.disabled = false;
+            }).catch(function (error) {
+              if (error.status === 428) setTimeout(poll, interval);
+              else { status.textContent = error.message; button.disabled = false; }
+            });
+          }
+          setTimeout(poll, interval);
+        }).catch(function (error) {
+          status.textContent = error.message;
+          button.disabled = false;
+        });
+      }
       function refreshVaultButtons() {
         return UnreaderMailCredentialVault.status().then(function (result) {
           var saved = !!result.data;
@@ -194,26 +260,37 @@
       function validCredentials(credentials) {
         return credentials && ['imap', 'pop3'].includes(credentials.protocol) &&
           Number(credentials.port) === (credentials.protocol === 'imap' ? 993 : 995) &&
-          credentials.host && credentials.username && credentials.password;
+          credentials.host && credentials.username && (credentials.authType === 'oauth2'
+            ? microsoftOAuthEnabled && credentials.protocol === 'imap' && credentials.accessToken && credentials.refreshToken
+            : credentials.password);
       }
       function fillCredentials(credentials) {
+        if (credentials.authType === 'oauth2' && microsoftOAuthEnabled) {
+          provider.value = 'outlook';
+          provider.dispatchEvent(new Event('change'));
+        }
         protocol.value = credentials.protocol;
         protocol.dispatchEvent(new Event('change'));
         document.getElementById('host').value = credentials.host;
         document.getElementById('port').value = credentials.port;
         document.getElementById('username').value = credentials.username;
-        document.getElementById('password').value = credentials.password;
+        document.getElementById('password').value = credentials.password || '';
         document.getElementById('mailbox').value = credentials.mailbox || 'INBOX';
         session = credentials;
+        if (credentials.authType === 'oauth2' && microsoftOAuthEnabled) microsoftTokens = { access_token: credentials.accessToken, refresh_token: credentials.refreshToken, expiresAt: 0 };
       }
       function request(action, id, page) {
         if (!session) return Promise.reject(new Error('Connect first.'));
         if (!token) return Promise.reject(new Error('Log in to Un-Reader before using mail.'));
-        return fetch(backend + '/api/mail/messages', {
-          method: 'POST',
-          cache: 'no-store',
-          headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
-          body: JSON.stringify(Object.assign({}, session, { action: action, id: id, page: page }))
+        var ready = session.authType === 'oauth2' ? refreshMicrosoftToken() : Promise.resolve();
+        return ready.then(function () {
+          var payload = Object.assign({}, session, { action: action, id: id, page: page });
+          delete payload.refreshToken;
+          return fetch(backend + '/api/mail/messages', {
+            method: 'POST', cache: 'no-store',
+            headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+            body: JSON.stringify(payload)
+          });
         }).then(function (response) {
           return response.json().then(function (data) {
             if (!response.ok) throw new Error(data.error || 'Mail request failed.');
@@ -297,14 +374,22 @@
       var mailProviders = {
         gmail: { imap: 'imap.gmail.com', pop3: 'pop.gmail.com', note: 'Enable IMAP or POP in Gmail settings. Google may require an app password; OAuth sign-in is not supported by this client.' },
         yahoo: { imap: 'imap.mail.yahoo.com', pop3: 'pop.mail.yahoo.com', note: 'Use your full email address. Yahoo requires a generated app password for third-party mail clients.' },
-        outlook: { imap: 'outlook.office365.com', pop3: 'outlook.office365.com', note: 'Outlook.com requires OAuth2/Modern Auth, which this client does not support; this preset may not authenticate.' },
+        outlook: { imap: 'outlook.office365.com', note: 'Sign in with Microsoft to connect Outlook over IMAP. POP3 sign-in is not supported.' },
         icloud: { imap: 'imap.mail.me.com', note: 'iCloud Mail supports IMAP, not POP3. Use an app-specific password.' },
         proton: { unsupported: true, note: 'Proton Mail requires Bridge on your computer. This hosted server cannot reach it; Proton does not provide POP3 or direct IMAP.' }
       };
       function updateMailSettings() {
+        if (provider.value === 'outlook' && !microsoftOAuthEnabled) provider.value = 'custom';
         var selected = mailProviders[provider.value];
         var hostInput = document.getElementById('host');
         var connectButton = document.getElementById('connect');
+        var useMicrosoftOAuth = provider.value === 'outlook';
+        document.getElementById('outlook-oauth').hidden = !useMicrosoftOAuth;
+        document.getElementById('password').required = !useMicrosoftOAuth;
+        if (useMicrosoftOAuth && protocol.value === 'pop3') {
+          protocol.value = 'imap';
+          localStorage.setItem('mailProtocol', 'imap');
+        }
         provider.querySelector('option[value="icloud"]').disabled = protocol.value === 'pop3';
         if (selected && selected.unsupported) {
           hostInput.value = '';
@@ -337,6 +422,7 @@
       document.getElementById('error-help').addEventListener('click', showHelp);
       document.getElementById('close-help').addEventListener('click', closeHelp);
       document.getElementById('dismiss-mail-error').addEventListener('click', clearMailError);
+      document.getElementById('microsoft-sign-in').addEventListener('click', startMicrosoftSignIn);
       document.addEventListener('keydown', function (event) {
         if (event.key === 'Escape') { closeHelp(); closeSettings(); }
       });
@@ -354,8 +440,9 @@
         var saveCredentials = document.getElementById('save-credentials').checked;
         var rememberDevice = document.getElementById('remember-device').checked;
         var pin = document.getElementById('vault-pin').value;
-        if (!host || !username || !password || port !== (protocol.value === 'imap' ? 993 : 995)) {
-          setStatus('Enter a hostname, username, password, and the secure port for this protocol.');
+        var useMicrosoftOAuth = provider.value === 'outlook';
+        if (!host || !username || (!useMicrosoftOAuth && !password) || (useMicrosoftOAuth && (!microsoftTokens || !microsoftTokens.access_token)) || port !== (protocol.value === 'imap' ? 993 : 995)) {
+          setStatus(useMicrosoftOAuth ? 'Sign in with Microsoft and enter your Outlook email address first.' : 'Enter a hostname, username, password, and the secure port for this protocol.');
           return;
         }
         if (saveCredentials) {
@@ -371,6 +458,7 @@
           password: password,
           mailbox: document.getElementById('mailbox').value.trim() || 'INBOX'
         };
+        if (useMicrosoftOAuth) Object.assign(credentials, { authType: 'oauth2', accessToken: microsoftTokens.access_token, refreshToken: microsoftTokens.refresh_token });
         session = credentials;
         renderText('subject', '');
         renderText('message-meta', 'Select a message to read it.');
@@ -466,7 +554,19 @@
       });
       window.addEventListener('pagehide', function () { session = null; });
       protocol.dispatchEvent(new Event('change'));
-      UnreaderMailCredentialVault.loadRemembered().then(function (remembered) {
+      fetch(backend + '/api/mail/oauth/status', { cache: 'no-store' }).then(function (response) {
+        return response.ok ? response.json() : { enabled: false };
+      }).catch(function () { return { enabled: false }; }).then(function (oauthStatus) {
+        microsoftOAuthEnabled = !!oauthStatus.enabled;
+        if (microsoftOAuthEnabled) {
+          provider.querySelector('option[value="outlook"]').hidden = false;
+        } else {
+          var outlookOption = provider.querySelector('option[value="outlook"]');
+          if (outlookOption) outlookOption.parentNode.removeChild(outlookOption);
+          document.getElementById('outlook-oauth').hidden = true;
+        }
+        return UnreaderMailCredentialVault.loadRemembered();
+      }).then(function (remembered) {
         if (remembered && validCredentials(remembered)) {
           fillCredentials(remembered);
           refreshVaultButtons();

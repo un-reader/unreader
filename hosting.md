@@ -43,6 +43,12 @@ Netlify's site environment variables, or your local `run.sh`, then restart/redep
 the server. A browser-side key or a key saved in Dashboard Settings is not used by
 the server Cloudflare provider.
 
+To enable Outlook OAuth mail, register a Microsoft Entra public-client application,
+enable public client flows, and add delegated `IMAP.AccessAsUser.All` permission for
+Exchange Online. Set its Application (client) ID as `MICROSOFT_OAUTH_CLIENT_ID` in
+the server environment. No client secret is used. The current integration supports
+Outlook IMAP; POP3 OAuth is not supported by the mail library.
+
 Now that all is set up, on your PC, go to 127.0.0.1:80 to test, if you used the same port as the example script.
 If you also want to test on your Kindle, make sure to keep port 80, since for some reason the browser rejects port numbers. Check your PC's local IP address, then go to that IP address on your Kindle.
 
