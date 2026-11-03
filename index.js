@@ -363,7 +363,7 @@ app.post('/api/mail/oauth/token', authenticateToken, async (req, res) => {
   } catch (error) {
     const message = String(error.message || 'Microsoft sign-in is pending.').slice(0, 500);
     res.status(['authorization_pending', 'slow_down'].includes(error.code) ? 428 : 400)
-      .json({ error: message });
+      .json({ error: message, error_code: error.code || '' });
   }
 });
 

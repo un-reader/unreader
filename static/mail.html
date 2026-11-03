@@ -26,6 +26,12 @@
     #connection .wide { grid-column: span 2; }
     #provider-note { grid-column: 1 / -1; margin: 0; }
     #connection .actions { display: flex; align-items: end; gap: 8px; }
+    #outlook-oauth { grid-column: 1 / -1; display: grid; justify-items: start; gap: 6px; min-width: 0; }
+    #outlook-oauth[hidden] { display: none; }
+    #microsoft-oauth-status { margin: 0; overflow-wrap: anywhere; }
+    #microsoft-sign-in { max-width: 100%; white-space: normal; text-align: left; }
+    #microsoft-verify-link { display: inline-block; max-width: 100%; color: var(--text-color); text-decoration: none; }
+    #microsoft-verify-link[hidden] { display: none; }
     #credential-vault { grid-column: 1 / -1; min-width: 0; border: var(--border); padding: 8px; }
     #credential-vault legend { font-weight: bold; }
     #connection #credential-vault .save-option { display: flex; align-items: center; gap: 8px; margin: 4px 0 8px; }
@@ -108,7 +114,7 @@
       <label>Password<input class="paper-input" id="password" type="password" autocomplete="current-password" required></label>
       <label id="mailbox-label">Mailbox<input class="paper-input" id="mailbox" type="text" value="INBOX" autocomplete="off"></label>
       <p id="provider-note" class="hint" role="status" aria-live="polite"></p>
-      <div id="outlook-oauth" hidden><button class="paper-btn shadow" id="microsoft-sign-in" type="button">SIGN IN WITH MICROSOFT</button> <a id="microsoft-verify-link" target="_blank" rel="noopener" hidden>Open Microsoft sign-in</a><p id="microsoft-oauth-status" class="hint" role="status" aria-live="polite"></p></div>
+      <div id="outlook-oauth" hidden><button class="paper-btn shadow" id="microsoft-sign-in" type="button">SIGN IN WITH MICROSOFT</button><a class="paper-btn shadow" id="microsoft-verify-link" target="_blank" rel="noopener" hidden>OPEN MICROSOFT SIGN-IN</a><p id="microsoft-oauth-status" class="hint" role="status" aria-live="polite"></p></div>
       <fieldset id="credential-vault">
         <legend>Saved mail credentials</legend>
         <p class="hint">Encrypted in this browser with your PIN; only ciphertext is uploaded. Your PIN never leaves this device.</p>
@@ -191,6 +197,7 @@
             if (!response.ok) {
               var error = new Error(result.error || 'Microsoft sign-in failed.');
               error.status = response.status;
+              error.code = result.error_code || '';
               throw error;
             }
             return result;
@@ -214,6 +221,7 @@
         var status = document.getElementById('microsoft-oauth-status');
         var link = document.getElementById('microsoft-verify-link');
         button.disabled = true;
+        button.textContent = 'STARTING SIGN-IN…';
         link.hidden = true;
         status.textContent = 'Starting Microsoft sign-in…';
         microsoftRequest('/api/mail/oauth/device-code', {}).then(function (device) {
@@ -222,10 +230,12 @@
           status.textContent = device.message || ('Enter code ' + device.user_code + ' at ' + link.href);
           var expiresAt = Date.now() + Number(device.expires_in || 900) * 1000;
           var interval = Math.max(5, Number(device.interval || 5)) * 1000;
+          button.textContent = 'WAITING FOR MICROSOFT…';
           function poll() {
             if (Date.now() >= expiresAt) {
               status.textContent = 'Microsoft sign-in code expired. Start again.';
               button.disabled = false;
+              button.textContent = 'SIGN IN WITH MICROSOFT';
               return;
             }
             microsoftRequest('/api/mail/oauth/token', { device_code: device.device_code }).then(function (result) {
@@ -233,15 +243,26 @@
               document.getElementById('password').value = '';
               status.textContent = 'Microsoft account authorized. Enter your Outlook email address, then press CONNECT / REFRESH.';
               button.disabled = false;
+              button.textContent = 'SIGNED IN — START AGAIN';
             }).catch(function (error) {
-              if (error.status === 428) setTimeout(poll, interval);
-              else { status.textContent = error.message; button.disabled = false; }
+              if (error.status === 428) {
+                if (error.code === 'slow_down') interval += 5000;
+                setTimeout(poll, interval);
+              } else if (!error.status || error.status >= 500 || error.status === 429) {
+                status.textContent = 'Checking Microsoft sign-in… ' + error.message;
+                setTimeout(poll, Math.max(interval, 10000));
+              } else {
+                status.textContent = error.message;
+                button.disabled = false;
+                button.textContent = 'SIGN IN WITH MICROSOFT';
+              }
             });
           }
           setTimeout(poll, interval);
         }).catch(function (error) {
           status.textContent = error.message;
           button.disabled = false;
+          button.textContent = 'SIGN IN WITH MICROSOFT';
         });
       }
       function refreshVaultButtons() {
