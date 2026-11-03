@@ -11,8 +11,8 @@
   <style>
     * { box-sizing: border-box; }
     html, body { overflow: auto; }
-    body { min-width: 720px; align-items: flex-start; justify-content: flex-start; }
-    .window { width: 100%; height: 100vh; min-width: 720px; min-height: 520px; margin: 0; flex: 0 0 auto; }
+    body { align-items: flex-start; justify-content: flex-start; }
+    .window { width: 100%; height: 100vh; min-width: 0; min-height: 0; margin: 0; flex: 0 0 auto; }
     .title-bar { flex-shrink: 0; }
     #back-btn { text-decoration: none; color: var(--text-color); }
     #title-controls { position: absolute; right: 10px; z-index: 2; display: flex; gap: 6px; }
@@ -55,18 +55,28 @@
     #message-meta { color: #444; font-size: 13px; overflow-wrap: anywhere; }
     body.dark-mode #message-meta { color: #bbb; }
     .hint { font-size: 13px; line-height: 1.4; }
-    #connection-overlay { display: none; position: fixed; inset: 0; z-index: 20; padding: 12px; background: rgba(0,0,0,.45); align-items: center; justify-content: center; }
+    #connection-overlay { display: none; position: fixed; inset: 0; z-index: 20; padding: 12px; overflow-y: auto; -webkit-overflow-scrolling: touch; background: rgba(0,0,0,.45); align-items: flex-start; justify-content: center; }
     #connection-overlay.open { display: flex; }
-    #help-overlay { display: none; position: fixed; inset: 0; z-index: 21; padding: 12px; background: rgba(0,0,0,.45); align-items: center; justify-content: center; }
+    #help-overlay { display: none; position: fixed; inset: 0; z-index: 21; padding: 12px; overflow-y: auto; -webkit-overflow-scrolling: touch; background: rgba(0,0,0,.45); align-items: flex-start; justify-content: center; }
     #help-overlay.open { display: flex; }
-    #connection-panel { width: min(760px, 100%); max-height: 100%; overflow: auto; padding: 12px; border: var(--border); background: var(--bg-color); box-shadow: 4px 4px 0 var(--text-color); }
+    #connection-panel { width: min(760px, 100%); max-height: calc(100vh - 24px); min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; margin: auto; padding: 12px; border: var(--border); background: var(--bg-color); box-shadow: 4px 4px 0 var(--text-color); }
     #connection-panel header, #help-panel header { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-    #help-panel { width: min(760px, 100%); max-height: 100%; overflow: auto; padding: 12px; border: var(--border); background: var(--bg-color); box-shadow: 4px 4px 0 var(--text-color); line-height: 1.45; }
+    #help-panel { width: min(760px, 100%); max-height: calc(100vh - 24px); min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; margin: auto; padding: 12px; border: var(--border); background: var(--bg-color); box-shadow: 4px 4px 0 var(--text-color); line-height: 1.45; }
     #help-panel h3 { margin-bottom: 4px; }
     #help-panel p { margin-top: 4px; }
     #connection { grid-template-columns: repeat(3, minmax(0, 1fr)); }
     @media (max-width: 900px) { #connection { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
     @media (max-width: 720px) { #connection { grid-template-columns: 1fr; } #connection .wide { grid-column: auto; } .vault-fields { grid-template-columns: 1fr; } }
+    @media (max-width: 720px), (max-height: 600px) {
+      html, body { height: auto; min-height: 100%; overflow: auto; }
+      body { display: block; }
+      .window { height: auto; min-height: 100vh; }
+      main { flex: 0 0 auto; overflow: visible; -webkit-overflow-scrolling: touch; }
+      #layout { height: 65vh; min-height: 420px; flex: 0 0 auto; grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(150px, 40%) minmax(220px, 1fr); }
+      #message-list { border-right: 0; border-bottom: var(--border); }
+      #title-controls { gap: 3px; right: 4px; }
+      #title-controls button { padding: 4px; font-size: 11px; }
+    }
   </style>
 </head>
 <body>
