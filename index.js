@@ -2573,7 +2573,9 @@ app.get('/history', authenticateToken, async (req, res) => {
   log(`history called by ${req.user.username} (${req.user.role.role})`);
   const off = Math.max(0, parseInt(req.query.index ?? '0', 10) * 10);
   const r = await db.query(
-    `SELECT m.*, pi.image_data, json_build_object('role', COALESCE(rr.role, ''), 'prefix', COALESCE(rr.prefix, ''), 'style', COALESCE(rr.style, ''), 'class', COALESCE(rr.class, '')) AS role,
+    `SELECT m.*, pi.image_data,
+       CASE WHEN m.reply_to_id IS NULL THEN NULL ELSE (SELECT json_build_object('id', r.id, 'username', r.username, 'content', CASE WHEN r.is_deleted THEN NULL ELSE r.content END, 'is_deleted', r.is_deleted) FROM messages r WHERE r.id = m.reply_to_id) END AS reply_to,
+       json_build_object('role', COALESCE(rr.role, ''), 'prefix', COALESCE(rr.prefix, ''), 'style', COALESCE(rr.style, ''), 'class', COALESCE(rr.class, '')) AS role,
        COALESCE((SELECT json_agg(json_build_object('code', reaction_code, 'count', reaction_count, 'mine', mine)) FROM (SELECT reaction_code, COUNT(*)::int AS reaction_count, BOOL_OR(username = $2) AS mine FROM message_reactions WHERE channel = 'public' AND message_id = m.id GROUP BY reaction_code ORDER BY reaction_code) mr), '[]'::json) AS reactions
        FROM messages m
        LEFT JOIN users u ON m.username = u.username
@@ -2595,7 +2597,8 @@ app.get('/dm-history', authenticateToken, async (req, res) => {
   const target = sanitizeUsername(req.query.target);
   const r = await db.query(
     `
-    SELECT d.id, d.sender AS username, d.receiver, d.timestamp, d.content, d.is_deleted, d.deleted_by, pi.image_data,
+    SELECT d.id, d.sender AS username, d.receiver, d.timestamp, d.content, d.is_deleted, d.deleted_by, d.reply_to_id, pi.image_data,
+      CASE WHEN d.reply_to_id IS NULL THEN NULL ELSE (SELECT json_build_object('id', p.id, 'username', p.sender, 'content', CASE WHEN p.is_deleted THEN NULL ELSE p.content END, 'is_deleted', p.is_deleted) FROM dms p WHERE p.id = d.reply_to_id AND ((p.sender = d.sender AND p.receiver = d.receiver) OR (p.sender = d.receiver AND p.receiver = d.sender))) END AS reply_to,
       COALESCE((SELECT json_agg(json_build_object('code', reaction_code, 'count', reaction_count, 'mine', mine)) FROM (SELECT reaction_code, COUNT(*)::int AS reaction_count, BOOL_OR(username = $4) AS mine FROM message_reactions WHERE channel = 'dm' AND message_id = d.id GROUP BY reaction_code ORDER BY reaction_code) mr), '[]'::json) AS reactions
     FROM dms d 
     LEFT JOIN users u ON d.sender = u.username 
@@ -3965,13 +3968,40 @@ wss.on('connection', (ws, req) => {
                 ? 'neighborhood'
                 : 'public';
         const target = data.target || data.slug || '';
+        let replyToId = null;
+        let storedMessageId = null;
+        if (
+          ['message', 'dm'].includes(data.type) &&
+          data.reply_to_id !== undefined &&
+          data.reply_to_id !== null
+        ) {
+          replyToId = data.reply_to_id;
+          if (typeof replyToId !== 'number' || !Number.isSafeInteger(replyToId) || replyToId < 1) {
+            ws.send(JSON.stringify({ type: 'error_alert', message: 'Choose a valid message to reply to.' }));
+            return;
+          }
+          const parent = data.type === 'dm'
+            ? await db.query(
+              'SELECT id FROM dms WHERE id = $1 AND is_deleted = false AND ((sender = $2 AND receiver = $3) OR (sender = $3 AND receiver = $2))',
+              [replyToId, authUser, sanitizeUsername(target)],
+            )
+            : await db.query(
+              'SELECT id FROM messages WHERE id = $1 AND is_deleted = false',
+              [replyToId],
+            );
+          if (!parent.rows.length) {
+            ws.send(JSON.stringify({ type: 'error_alert', message: 'That message is no longer available to reply to.' }));
+            return;
+          }
+        }
 
         if (data.type === 'message') {
           const content = sanitize(data.content);
-          await db.query(
-            'INSERT INTO messages (username, timestamp, content, sender) VALUES ($1, $2, $3, $4);',
-            [authUser, tStr, content, authUser],
+          const inserted = await db.query(
+            'INSERT INTO messages (username, timestamp, content, sender, reply_to_id) VALUES ($1, $2, $3, $4, $5) RETURNING id;',
+            [authUser, tStr, content, authUser, replyToId],
           );
+          storedMessageId = inserted.rows[0].id;
         }
         if (data.type === 'topic_message') {
           const content = sanitize(data.content);
@@ -3984,10 +4014,11 @@ wss.on('connection', (ws, req) => {
         if (data.type === 'dm') {
           const content = sanitize(data.content);
           const target = sanitizeUsername(data.target);
-          await db.query(
-            'INSERT INTO dms (sender, receiver, timestamp, content, username) VALUES ($1, $2, $3, $4, $5);',
-            [authUser, target, tStr, content, authUser],
+          const inserted = await db.query(
+            'INSERT INTO dms (sender, receiver, timestamp, content, username, reply_to_id) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id;',
+            [authUser, target, tStr, content, authUser, replyToId],
           );
+          storedMessageId = inserted.rows[0].id;
         }
         if (data.type === 'neighborhood_post') {
           const title = sanitize(data.title);
@@ -4021,8 +4052,8 @@ wss.on('connection', (ws, req) => {
         if (data.type === 'message') {
           const role = (await getUserRoles(authUser)).role;
           const latest = await db.query(
-            "SELECT m.id, m.username, m.timestamp, m.content, m.is_deleted, m.deleted_by, m.sender, pi.image_data FROM messages m LEFT JOIN LATERAL (SELECT image_data FROM profile_images WHERE LOWER(TRIM(LEADING '@' FROM username)) = LOWER(m.username) ORDER BY (username = m.username) DESC LIMIT 1) pi ON true WHERE m.username = $1 AND m.timestamp = $2 ORDER BY m.id DESC LIMIT 1;",
-            [authUser, tStr],
+            "SELECT m.id, m.username, m.timestamp, m.content, m.is_deleted, m.deleted_by, m.sender, m.reply_to_id, CASE WHEN r.id IS NULL THEN NULL ELSE json_build_object('id', r.id, 'username', r.username, 'content', CASE WHEN r.is_deleted THEN NULL ELSE r.content END, 'is_deleted', r.is_deleted) END AS reply_to, pi.image_data FROM messages m LEFT JOIN messages r ON r.id = m.reply_to_id LEFT JOIN LATERAL (SELECT image_data FROM profile_images WHERE LOWER(TRIM(LEADING '@' FROM username)) = LOWER(m.username) ORDER BY (username = m.username) DESC LIMIT 1) pi ON true WHERE m.id = $1;",
+            [storedMessageId],
           );
           if (latest.rows[0])
             livePayload = {
@@ -4046,8 +4077,8 @@ wss.on('connection', (ws, req) => {
         } else if (data.type === 'dm') {
           const role = (await getUserRoles(authUser)).role;
           const latest = await db.query(
-            "SELECT d.id, d.sender AS username, d.receiver, d.timestamp, d.content, d.is_deleted, d.deleted_by, pi.image_data FROM dms d LEFT JOIN LATERAL (SELECT image_data FROM profile_images WHERE LOWER(TRIM(LEADING '@' FROM username)) = LOWER(d.sender) ORDER BY (username = d.sender) DESC LIMIT 1) pi ON true WHERE d.sender = $1 AND d.receiver = $2 AND d.timestamp = $3 ORDER BY d.id DESC LIMIT 1;",
-            [authUser, target, tStr],
+            "SELECT d.id, d.sender AS username, d.receiver, d.timestamp, d.content, d.is_deleted, d.deleted_by, d.reply_to_id, CASE WHEN r.id IS NULL THEN NULL ELSE json_build_object('id', r.id, 'username', r.sender, 'content', CASE WHEN r.is_deleted THEN NULL ELSE r.content END, 'is_deleted', r.is_deleted) END AS reply_to, pi.image_data FROM dms d LEFT JOIN dms r ON r.id = d.reply_to_id AND ((r.sender = d.sender AND r.receiver = d.receiver) OR (r.sender = d.receiver AND r.receiver = d.sender)) LEFT JOIN LATERAL (SELECT image_data FROM profile_images WHERE LOWER(TRIM(LEADING '@' FROM username)) = LOWER(d.sender) ORDER BY (username = d.sender) DESC LIMIT 1) pi ON true WHERE d.id = $1;",
+            [storedMessageId],
           );
           if (latest.rows[0])
             livePayload = {

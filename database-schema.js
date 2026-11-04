@@ -21,12 +21,14 @@ CREATE TABLE IF NOT EXISTS mod_logs (
 
 CREATE TABLE IF NOT EXISTS messages (
   id SERIAL PRIMARY KEY, username TEXT NOT NULL, timestamp TEXT NOT NULL, content TEXT NOT NULL,
-  is_deleted BOOLEAN DEFAULT false, deleted_by TEXT, sender TEXT
+  is_deleted BOOLEAN DEFAULT false, deleted_by TEXT, sender TEXT, reply_to_id INTEGER
 );
 CREATE TABLE IF NOT EXISTS dms (
   id SERIAL PRIMARY KEY, username TEXT, sender TEXT NOT NULL, receiver TEXT NOT NULL, timestamp TEXT NOT NULL, content TEXT NOT NULL,
-  is_deleted BOOLEAN DEFAULT false, deleted_by TEXT
+  is_deleted BOOLEAN DEFAULT false, deleted_by TEXT, reply_to_id INTEGER
 );
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS reply_to_id INTEGER;
+ALTER TABLE dms ADD COLUMN IF NOT EXISTS reply_to_id INTEGER;
 CREATE TABLE IF NOT EXISTS profiles (
   username TEXT PRIMARY KEY REFERENCES users(username) ON DELETE CASCADE, bio TEXT DEFAULT 'Being a human fahhh.', location TEXT DEFAULT 'Earth', avatar_emoji TEXT DEFAULT '👤'
 );
