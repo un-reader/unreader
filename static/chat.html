@@ -1249,7 +1249,10 @@
                     });
                     data = await response.json().catch(function () { return null; });
                 }
-                if (!response.ok) throw new Error(data && typeof data.error === "string" ? data.error : data && data.error && data.error.message ? data.error.message : "AI provider request failed (" + response.status + ").");
+                if (!response.ok) {
+                    var providerError = data && typeof data.error === "string" ? data.error : data && data.error && data.error.message ? data.error.message : data && Array.isArray(data.errors) ? data.errors.map(function (item) { return item && item.message; }).filter(Boolean).join("; ") : "";
+                    throw new Error(providerError || "AI provider request failed (" + response.status + ").");
+                }
                 var content = data && data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content;
                 if (typeof content !== "string" || !content.trim()) throw new Error("AI provider returned an empty response.");
                 return content.trim();

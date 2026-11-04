@@ -610,8 +610,12 @@ app.post('/api/ai/cloudflare', authenticateToken, async (req, res) => {
     );
     const data = await response.json().catch(() => null);
     if (!response.ok) {
-      log('Cloudflare AI request failed with status:', response.status);
-      return res.status(502).json({ error: 'Cloudflare AI request failed.' });
+      const detail = Array.isArray(data?.errors)
+        ? data.errors.map((item) => item?.message).filter(Boolean).join('; ')
+        : data?.error?.message || data?.error;
+      const message = String(detail || `HTTP ${response.status}`).replace(/[\r\n\u0000-\u001f]/g, ' ').slice(0, 500);
+      log('Cloudflare AI request failed with status:', response.status, message);
+      return res.status(502).json({ error: `Cloudflare AI request failed: ${message}` });
     }
     res.json(data);
   } catch (err) {
