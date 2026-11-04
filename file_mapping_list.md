@@ -86,8 +86,8 @@ All files in this section are served from `static/`. The dashboard links to thes
 
 | File or directory | Used for |
 | --- | --- |
-| [`static/DTM-Mono.ttf`](static/DTM-Mono.ttf) | Determination Mono font, in the official build, it's used. |
-| [`static/pusab.ttf`](static/pusab.ttf) | Pusab font used by Geometry Dash textbox roles and related UI. |
+| [`static/DTM-Mono.ttf`](static/DTM-Mono.ttf) | Determination Mono font, in the official build, it's used for the "lmao" role (Reserved for @lmaokasdf123). |
+| [`static/pusab.ttf`](static/pusab.ttf) | Pusab font used by Geometry Dash textbox roles (unused in the server as of now). |
 | [`static/assets/fit.json`](static/assets/fit.json) | Doodle game asset/layout metadata. |
 | [`static/assets/player.svg`](static/assets/player.svg), [`static/assets/playerUp.svg`](static/assets/playerUp.svg), [`static/assets/playerDown.svg`](static/assets/playerDown.svg), [`static/assets/jetpack.svg`](static/assets/jetpack.svg) | Doodle game player poses and jetpack. |
 | [`static/assets/src/`](static/assets/src/) | Source SVG versions of the Doodle game artwork; optimized or runtime copies are in `static/assets/`. |
