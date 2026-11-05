@@ -3970,6 +3970,10 @@ wss.on('connection', (ws, req) => {
         const target = data.target || data.slug || '';
         let replyToId = null;
         let storedMessageId = null;
+        const clientMessageId = typeof data.client_message_id === 'string' &&
+          /^[a-zA-Z0-9_-]{1,80}$/.test(data.client_message_id)
+          ? data.client_message_id
+          : null;
         if (
           ['message', 'dm'].includes(data.type) &&
           data.reply_to_id !== undefined &&
@@ -4046,6 +4050,14 @@ wss.on('connection', (ws, req) => {
             'INSERT INTO topics (slug, title, username, timestamp) VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING;',
             [slug, title, authUser, tStr],
           );
+        }
+
+        if (clientMessageId && storedMessageId !== null && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({
+            type: 'message_saved',
+            client_message_id: clientMessageId,
+            id: storedMessageId,
+          }));
         }
 
         let livePayload = null;

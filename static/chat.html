@@ -511,6 +511,8 @@
             var currentHistoryIndex = 0;
             var modModeActive = false;
             var replyTarget = null;
+            var messageAckWaiters = Object.create(null);
+            var messageAckSequence = 0;
             var userRoles = {
                 role: {
                     role: '',
@@ -631,6 +633,11 @@
                     }
                     if (data.type === "error_alert") {
                         await unAlert(data.message);
+                        return;
+                    }
+                    if (data.type === "message_saved") {
+                        var ack = messageAckWaiters[data.client_message_id];
+                        if (ack) ack(data.id);
                         return;
                     }
                     if (data.type === "live_message") {
@@ -972,6 +979,22 @@
                 if (context) context.hidden = true;
             }
 
+            function createMessageAck() {
+                var id = Date.now().toString(36) + "-" + (++messageAckSequence).toString(36);
+                var promise = new Promise(function(resolve) {
+                    var timer = setTimeout(function() {
+                        delete messageAckWaiters[id];
+                        resolve(null);
+                    }, 15000);
+                    messageAckWaiters[id] = function(messageId) {
+                        clearTimeout(timer);
+                        delete messageAckWaiters[id];
+                        resolve(messageId);
+                    };
+                });
+                return { id: id, promise: promise };
+            }
+
             function injectModTray(targetNode, data, isMe) {
                 if (
                     userRoles.role.role && (!isAdminUser(userRoles) && !isModeratorUser(userRoles)) ||
@@ -1093,7 +1116,7 @@
                                 if (latestMsg.content.trim().startsWith("@system")) {
                                     localStorage.setItem("sys_last_id", latestMsg.id);
                                     var query = latestMsg.content.trim().substring(7).trim();
-                                    simulateSystemSearch(query, latestMsg.username);
+                                    simulateSystemSearch(query, latestMsg.username, latestMsg.id, currentMode);
                                 }
                             }
                         }
@@ -1110,21 +1133,24 @@
 
                 var helpCommand = /^@sHstEmLP_(?:\s|$)/i;
                 if (helpCommand.test(text)) {
+                    var helpAck = createMessageAck();
                     socket.send(JSON.stringify({
                         type: currentMode === "public" ? "message" : "dm",
                         content: text,
                         target: currentTarget,
                         reply_to_id: replyTarget ? replyTarget.id : null,
+                        client_message_id: helpAck.id,
                     }));
                     input.value = "";
                     clearReplyTarget();
-                    processHelpAICore(currentMode, currentTarget, text);
+                    processHelpAICore(currentMode, currentTarget, text, helpAck.promise);
                     return;
                 }
 
                 // GLOBAL CHAT INTERCEPT: Checks for the @system keyword in both public and DMs
                 if (text.includes("@system")) {
                     log("Global decentralized AI intercept sequence triggered.");
+                    var systemAck = createMessageAck();
 
                     // 1. Instantly send out your query block so the rest of the BBS sees your prompt
                     socket.send(
@@ -1133,6 +1159,7 @@
                             content: text,
                             target: currentTarget,
                             reply_to_id: replyTarget ? replyTarget.id : null,
+                            client_message_id: systemAck.id,
                         }),
                     );
                     input.value = "";
@@ -1140,7 +1167,7 @@
 
                     // 2. Extract your query and run it through the decentralized generator link
                     var query = text.substring(7).trim();
-                    processGlobalAICore(query, currentMode, currentTarget, text);
+                    processGlobalAICore(query, currentMode, currentTarget, text, systemAck.promise);
                     return;
                 }
 
@@ -1346,37 +1373,47 @@
                 }).join("");
             }
 
-            async function processHelpAICore(mode, target, currentMessage) {
+            async function processHelpAICore(mode, target, currentMessage, messageIdPromise) {
+                var replyToId = null;
                 try {
                     var messages = [{ role: "system", content: generateSystemPrompt() }, ...getCurrentPageConversation(currentMessage)];
                     var answer = await requestSystemAI(messages, "help");
                     answer = glitchText(answer, 0.45);
+                    replyToId = await messageIdPromise;
+                    if (!replyToId) return;
                     if (socket && socket.readyState === WebSocket.OPEN) {
                         socket.send(JSON.stringify({
                             type: mode === "public" ? "message" : "dm",
                             content: "\u200B[SYSTEM_BOT]\u200B" + answer,
                             target: target,
+                            reply_to_id: replyToId,
                         }));
                     }
                 } catch (error) {
+                    if (!replyToId) replyToId = await messageIdPromise;
+                    if (!replyToId) return;
                     if (socket && socket.readyState === WebSocket.OPEN) {
                         socket.send(JSON.stringify({
                             type: mode === "public" ? "message" : "dm",
                             content: "\u200B[SYSTEM_BOT]\u200BHELP_ LINK CORRUPTED: " + error.message,
                             target: target,
+                            reply_to_id: replyToId,
                         }));
                     }
                 }
             }
 
             // ---- DECENTRALIZED GLOBAL AI RUNNER (CLIENT-SIDE) ----
-            async function processGlobalAICore(query, mode, target, currentMessage) {
+            async function processGlobalAICore(query, mode, target, currentMessage, messageIdPromise) {
                 if (!query) return;
 
                 aiHistory = getCurrentPageConversation(currentMessage);
+                var replyToId = null;
 
                 try {
                     var aiOutput = await requestSystemAI([{ role: "system", content: generateSystemPrompt() }, ...aiHistory]);
+                    replyToId = await messageIdPromise;
+                    if (!replyToId) return;
 
                     log("AI OUTPUT: ", aiOutput);
 
@@ -1401,6 +1438,7 @@
                                     type: mode === "public" ? "message" : "dm",
                                     content: "\u200B[SYSTEM_BOT]\u200B" + aiOutput,
                                     target: target,
+                                    reply_to_id: replyToId,
                                 }),
                             );
                         }
@@ -1426,6 +1464,7 @@
                                         type: mode === "public" ? "message" : "dm",
                                         content: "\u200B[SYSTEM_BOT]\u200B" + a.message,
                                         target: target,
+                                        reply_to_id: replyToId,
                                     }),
                                 );
                             }
@@ -1450,12 +1489,15 @@
                     }
                 } catch (err) {
                     log("Global AI Engine Generation Fault:", err);
+                    if (!replyToId) replyToId = await messageIdPromise;
+                    if (!replyToId) return;
                     if (socket && socket.readyState === WebSocket.OPEN) {
                         socket.send(
                             JSON.stringify({
                                 type: mode === "public" ? "message" : "dm",
                                 content: "\u200B[SYSTEM_BOT]\u200B" + err,
                                 target: target,
+                                reply_to_id: replyToId,
                             }),
                         );
                     }
@@ -1463,7 +1505,7 @@
             }
 
             // ---- LIVE AI ENGINE DISPATCHER (GEMINI CORE INTEGRATION FOR ALT BOT USER) ----
-            async function simulateSystemSearch(query, senderUsername) {
+            async function simulateSystemSearch(query, senderUsername, promptMessageId, mode) {
                 if (!query) return;
 
                 aiHistory = getCurrentPageConversation();
@@ -1487,7 +1529,7 @@
                         var aiActions = JSON.parse(aiOutput);
                     } catch (e) {
                         log(e);
-                        dispatchSystemResponse(aiOutput, senderUsername);
+                        dispatchSystemResponse(aiOutput, senderUsername, promptMessageId, mode);
                         return;
                     }
 
@@ -1504,7 +1546,7 @@
                                 }),
                             );
                         } else if (a.action === "text") {
-                            dispatchSystemResponse(a.message, senderUsername);
+                            dispatchSystemResponse(a.message, senderUsername, promptMessageId, mode);
                         } else if (a.action === "dm") {
                             socket.send(
                                 JSON.stringify({
@@ -1526,17 +1568,18 @@
                     }
                 } catch (err) {
                     log("AI Engine Generation Fault:", err);
-                    dispatchSystemResponse("Error: Local AI generation core returned processing fault.", senderUsername);
+                    dispatchSystemResponse("Error: Local AI generation core returned processing fault.", senderUsername, promptMessageId, mode);
                 }
             }
 
-            function dispatchSystemResponse(outputText, senderUsername) {
+            function dispatchSystemResponse(outputText, senderUsername, promptMessageId, mode) {
                 if (socket && socket.readyState === WebSocket.OPEN) {
                     socket.send(
                         JSON.stringify({
-                            type: currentMode === "public" ? "message" : "dm",
+                            type: mode === "public" ? "message" : "dm",
                             content: outputText,
-                            target: currentMode === "public" ? "" : senderUsername,
+                            target: mode === "public" ? "" : senderUsername,
+                            reply_to_id: promptMessageId || null,
                         }),
                     );
                 }

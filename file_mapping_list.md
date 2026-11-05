@@ -146,7 +146,7 @@ The root WebSocket (`/`) handles chat authentication, public/topic/DM/forum mess
 | [`.gitattributes`](.gitattributes) | Git text/binary and line-ending handling. |
 | [`CNAME`](CNAME) | Custom domain metadata for static-site hosting. |
 | [`site.webmanifest`](site.webmanifest) | Installable-site name, icons, and browser theme metadata. |
-| [`kindle-browser-quirk-system.skill`](kindle-browser-quirk-system.skill) | Packaged Kindle browser compatibility reference. |
+| [`kindle-browser-quirk-system.skill`](kindle-browser-quirk-system.skill) | Skill for reference, if working with Claude/Codex |
 
 ## Hosting and data flow at a glance
 
