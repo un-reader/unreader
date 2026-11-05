@@ -967,7 +967,12 @@
             }
 
             function setReplyTarget(data) {
-                replyTarget = { id: Number(data.id), username: data.username || data.sender || "unknown", content: data.content || "" };
+                replyTarget = {
+                    id: Number(data.id),
+                    username: data.username || data.sender || "unknown",
+                    content: data.content || "",
+                    isSystem: Boolean(data.is_system_bot || (data.username || data.sender || "").toLowerCase() === "system"),
+                };
                 document.getElementById("reply-context-text").textContent = "Replying to @" + replyTarget.username + ": " + replyTarget.content.replace(/\s+/g, " ").slice(0, 140);
                 document.getElementById("reply-context").hidden = false;
                 document.getElementById("content").focus();
@@ -1147,8 +1152,9 @@
                     return;
                 }
 
-                // GLOBAL CHAT INTERCEPT: Checks for the @system keyword in both public and DMs
-                if (text.includes("@system")) {
+                // Replying to a system message invokes it without requiring another mention.
+                var repliesToSystem = Boolean(replyTarget && replyTarget.isSystem);
+                if (text.includes("@system") || repliesToSystem) {
                     log("Global decentralized AI intercept sequence triggered.");
                     var systemAck = createMessageAck();
 
@@ -1166,7 +1172,7 @@
                     clearReplyTarget();
 
                     // 2. Extract your query and run it through the decentralized generator link
-                    var query = text.substring(7).trim();
+                    var query = text.includes("@system") ? text.substring(7).trim() : text;
                     processGlobalAICore(query, currentMode, currentTarget, text, systemAck.promise);
                     return;
                 }
