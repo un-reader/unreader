@@ -206,6 +206,23 @@
             border-style: dotted !important;
             background: #fafafa !important;
             opacity: 0.6;
+            padding: 2px 6px;
+            box-shadow: none;
+        }
+
+        .purged-msg .message-meta {
+            margin: 0;
+            font-size: 9px;
+        }
+
+        .purged-msg .message-meta img,
+        .purged-msg .reply-quote {
+            display: none;
+        }
+
+        .purged-msg .message-text {
+            font-size: 10px;
+            line-height: 1.1;
         }
         
         .admin-msg .message-text,
@@ -928,6 +945,9 @@
                 if (data.reply_to) {
                     var quote = document.createElement("div");
                     quote.className = "reply-quote";
+                    quote.dataset.replyContext = data.reply_to.is_deleted
+                        ? "[deleted message]"
+                        : "@" + data.reply_to.username + ": " + String(data.reply_to.content || "");
                     quote.textContent = data.reply_to.is_deleted
                         ? "Reply to a deleted message"
                         : "Reply to @" + data.reply_to.username + ": " + String(data.reply_to.content || "").replace(/\s+/g, " ").slice(0, 180);
@@ -960,7 +980,7 @@
                     replyButton.onclick = function() { setReplyTarget(data); };
                     containerDiv.appendChild(replyButton);
                 }
-                renderMessageReactions(containerDiv, data, socket);
+                if (!data.is_deleted) renderMessageReactions(containerDiv, data, socket);
                 injectModTray(containerDiv, data, isMe);
                 chatWrapper.appendChild(containerDiv);
                 chatWrapper.scrollTop = chatWrapper.scrollHeight;
@@ -1135,6 +1155,7 @@
                 var input = document.getElementById("content");
                 var text = input.value.trim();
                 if (!text || !socket || socket.readyState !== WebSocket.OPEN) return;
+                var replyContext = replyTarget ? { username: replyTarget.username, content: replyTarget.content } : null;
 
                 var helpCommand = /^@sHstEmLP_(?:\s|$)/i;
                 if (helpCommand.test(text)) {
@@ -1148,7 +1169,7 @@
                     }));
                     input.value = "";
                     clearReplyTarget();
-                    processHelpAICore(currentMode, currentTarget, text, helpAck.promise);
+                    processHelpAICore(currentMode, currentTarget, text, helpAck.promise, replyContext);
                     return;
                 }
 
@@ -1173,7 +1194,7 @@
 
                     // 2. Extract your query and run it through the decentralized generator link
                     var query = text.includes("@system") ? text.substring(7).trim() : text;
-                    processGlobalAICore(query, currentMode, currentTarget, text, systemAck.promise);
+                    processGlobalAICore(query, currentMode, currentTarget, text, systemAck.promise, replyContext);
                     return;
                 }
 
@@ -1212,7 +1233,7 @@
                 return systemProfilePictureRequest;
             }
 
-            function getCurrentPageConversation(currentMessage) {
+            function getCurrentPageConversation(currentMessage, currentReplyContext) {
                 var conversation = [];
                 var messages = document.querySelectorAll("#chat-scroll-wrapper .message");
                 for (var i = 0; i < messages.length; i++) {
@@ -1221,6 +1242,10 @@
                     var messageText = messages[i].querySelector(".message-text");
                     var content = messageText ? messageText.textContent.trim() : "";
                     if (!content) continue;
+                    var replyQuote = messages[i].querySelector(".reply-quote");
+                    if (replyQuote && replyQuote.dataset.replyContext) {
+                        content = "[Reply context: " + replyQuote.dataset.replyContext + "]\n" + content;
+                    }
                     conversation.push({
                         role: username === "system" ? "assistant" : "user",
                         content: username === "system" ? content : "@" + username + ": " + content,
@@ -1231,15 +1256,18 @@
                 if (currentMessage) {
                     var lastMessage = conversation[conversation.length - 1];
                     if (!lastMessage || lastMessage.username !== myUsername || lastMessage.content.indexOf(currentMessage) === -1) {
+                        var currentContent = currentReplyContext
+                            ? "[Reply context: @" + currentReplyContext.username + ": " + currentReplyContext.content + "]\n" + currentMessage
+                            : currentMessage;
                         conversation.push({
                             role: "user",
-                            content: "@" + myUsername + ": " + currentMessage,
+                            content: "@" + myUsername + ": " + currentContent,
                             username: myUsername
                         });
                     }
                 }
 
-                return conversation.slice(-40).map(function(message) {
+                return conversation.slice(-12).map(function(message) {
                     return {
                         role: message.role,
                         content: message.content
@@ -1340,7 +1368,7 @@
                     if (provider === "custom" && !/^https:\/\//i.test(url)) throw new Error("Custom AI endpoints must use HTTPS.");
                     headers.Authorization = "Bearer " + config.key;
                 }
-                var requestBody = { messages: messages, model: model, max_tokens: assistant === "help" ? 1024 : 4096, temperature: 1, stream: false };
+                var requestBody = { messages: messages, model: model, max_tokens: 1024, temperature: 1, stream: false };
                 if (assistant === "help") Object.assign(requestBody, { top_p: 1, top_k: 50, repetition_penalty: 1, frequency_penalty: 0, presence_penalty: 0 });
                 if (url === BACKEND_URL + "/api/ai/cloudflare") requestBody.assistant = assistant;
                 var response = await fetch(url, {
@@ -1379,10 +1407,10 @@
                 }).join("");
             }
 
-            async function processHelpAICore(mode, target, currentMessage, messageIdPromise) {
+            async function processHelpAICore(mode, target, currentMessage, messageIdPromise, replyContext) {
                 var replyToId = null;
                 try {
-                    var messages = [{ role: "system", content: generateSystemPrompt() }, ...getCurrentPageConversation(currentMessage)];
+                    var messages = [{ role: "system", content: generateSystemPrompt() }, ...getCurrentPageConversation(currentMessage, replyContext)];
                     var answer = await requestSystemAI(messages, "help");
                     answer = glitchText(answer, 0.45);
                     replyToId = await messageIdPromise;
@@ -1410,10 +1438,10 @@
             }
 
             // ---- DECENTRALIZED GLOBAL AI RUNNER (CLIENT-SIDE) ----
-            async function processGlobalAICore(query, mode, target, currentMessage, messageIdPromise) {
+            async function processGlobalAICore(query, mode, target, currentMessage, messageIdPromise, replyContext) {
                 if (!query) return;
 
-                aiHistory = getCurrentPageConversation(currentMessage);
+                aiHistory = getCurrentPageConversation(currentMessage, replyContext);
                 var replyToId = null;
 
                 try {

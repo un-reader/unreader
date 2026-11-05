@@ -3955,7 +3955,7 @@ wss.on('connection', (ws, req) => {
         ].includes(data.type)
       ) {
         log(
-          `${data.type} called by ${authUser} (${activeClients.get(authUser).userRoles.role.role}): ${data.content}`,
+          `${data.type} called by ${authUser} (${userRoles.role?.role || ''}): ${data.content}`,
         );
         const tStr = String(Date.now());
         const mode =
@@ -3984,27 +3984,21 @@ wss.on('connection', (ws, req) => {
             ws.send(JSON.stringify({ type: 'error_alert', message: 'Choose a valid message to reply to.' }));
             return;
           }
-          const parent = data.type === 'dm'
-            ? await db.query(
-              'SELECT id FROM dms WHERE id = $1 AND is_deleted = false AND ((sender = $2 AND receiver = $3) OR (sender = $3 AND receiver = $2))',
-              [replyToId, authUser, sanitizeUsername(target)],
-            )
-            : await db.query(
-              'SELECT id FROM messages WHERE id = $1 AND is_deleted = false',
-              [replyToId],
-            );
-          if (!parent.rows.length) {
-            ws.send(JSON.stringify({ type: 'error_alert', message: 'That message is no longer available to reply to.' }));
-            return;
-          }
         }
 
         if (data.type === 'message') {
           const content = sanitize(data.content);
           const inserted = await db.query(
-            'INSERT INTO messages (username, timestamp, content, sender, reply_to_id) VALUES ($1, $2, $3, $4, $5) RETURNING id;',
+            `INSERT INTO messages (username, timestamp, content, sender, reply_to_id)
+             SELECT $1, $2, $3, $4, $5
+             WHERE $5::integer IS NULL OR EXISTS (SELECT 1 FROM messages WHERE id = $5 AND is_deleted = false)
+             RETURNING id;`,
             [authUser, tStr, content, authUser, replyToId],
           );
+          if (!inserted.rows.length) {
+            ws.send(JSON.stringify({ type: 'error_alert', message: 'That message is no longer available to reply to.' }));
+            return;
+          }
           storedMessageId = inserted.rows[0].id;
         }
         if (data.type === 'topic_message') {
@@ -4019,9 +4013,19 @@ wss.on('connection', (ws, req) => {
           const content = sanitize(data.content);
           const target = sanitizeUsername(data.target);
           const inserted = await db.query(
-            'INSERT INTO dms (sender, receiver, timestamp, content, username, reply_to_id) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id;',
+            `INSERT INTO dms (sender, receiver, timestamp, content, username, reply_to_id)
+             SELECT $1, $2, $3, $4, $5, $6
+             WHERE $6::integer IS NULL OR EXISTS (
+               SELECT 1 FROM dms WHERE id = $6 AND is_deleted = false
+                 AND ((sender = $1 AND receiver = $2) OR (sender = $2 AND receiver = $1))
+             )
+             RETURNING id;`,
             [authUser, target, tStr, content, authUser, replyToId],
           );
+          if (!inserted.rows.length) {
+            ws.send(JSON.stringify({ type: 'error_alert', message: 'That message is no longer available to reply to.' }));
+            return;
+          }
           storedMessageId = inserted.rows[0].id;
         }
         if (data.type === 'neighborhood_post') {
