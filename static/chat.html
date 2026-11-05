@@ -36,6 +36,8 @@
             overflow-y: auto;
             background: white;
         }
+
+        .dm-unread-dot { float: right; margin-left: 4px; color: #b00000; font-weight: bold; }
         
         .page-btn {
             background: #ffffff;
@@ -521,6 +523,7 @@
         <script type='text/javascript'>
             var token = localStorage.getItem("token");
             var myUsername = localStorage.getItem("username");
+            var unreadDMs = [];
             var currentMode = "public";
             var currentTarget = "";
             var socket = null;
@@ -660,8 +663,24 @@
                     if (data.type === "live_message") {
                         if (data.channel === "public" && currentMode === "public" && currentHistoryIndex === 0) {
                             appendMessage(data.message);
-                        } else if (data.channel === "dm" && currentMode === "dm" && currentHistoryIndex === 0 && data.message && (data.message.username === myUsername || data.message.receiver === myUsername) && currentTarget === (data.message.username === myUsername ? data.message.receiver : data.message.username)) {
-                            appendMessage(data.message);
+                        } else if (data.channel === "dm" && data.message && (data.message.username === myUsername || data.message.receiver === myUsername)) {
+                            var peer = data.message.username === myUsername ? data.message.receiver : data.message.username;
+                            ensureDMNavOption(peer);
+                            var viewingDM = currentMode === "dm" && currentHistoryIndex === 0 && currentTarget === peer;
+                            if (data.message.username !== myUsername && !viewingDM) markDMUnread(peer);
+                            if (viewingDM) {
+                                appendMessage(data.message);
+                                if (data.message.username !== myUsername) {
+                                    socket.send(JSON.stringify({ type: "dm_mark_read", peer: peer, id: data.message.id }));
+                                }
+                            }
+                        }
+                        return;
+                    }
+                    if (data.type === "dm_unread") {
+                        if (data.username && data.username !== myUsername) {
+                            ensureDMNavOption(data.username);
+                            markDMUnread(data.username);
                         }
                         return;
                     }
@@ -823,7 +842,11 @@
                     if (xhr.readyState === 4 && xhr.status === 200) {
                         var contacts = JSON.parse(xhr.responseText);
                         for (var i = 0; i < contacts.length; i++) {
-                            ensureDMNavOption(contacts[i]);
+                            var contact = typeof contacts[i] === "string" ? { username: contacts[i] } : contacts[i];
+                            ensureDMNavOption(contact.username);
+                            if (contact.unread && !(currentMode === "dm" && currentTarget === contact.username)) {
+                                markDMUnread(contact.username);
+                            }
                         }
                     }
                 };
@@ -840,10 +863,30 @@
                 item.className = "nav-item";
                 item.id = "nav-dm-" + username;
                 item.textContent = "💬 " + username;
+                var unreadDot = document.createElement("span");
+                unreadDot.className = "dm-unread-dot";
+                unreadDot.textContent = "•";
+                unreadDot.setAttribute("aria-label", "Unread messages");
+                unreadDot.hidden = unreadDMs.indexOf(username) === -1;
+                item.appendChild(unreadDot);
                 item.onclick = function() {
                     switchChannel("dm", username);
                 };
                 document.getElementById("dm-list").appendChild(item);
+            }
+
+            function markDMUnread(username) {
+                if (unreadDMs.indexOf(username) === -1) unreadDMs.push(username);
+                var nav = document.getElementById("nav-dm-" + username);
+                var dot = nav && nav.querySelector(".dm-unread-dot");
+                if (dot) dot.hidden = false;
+            }
+
+            function clearDMUnread(username) {
+                unreadDMs = unreadDMs.filter(function(name) { return name !== username; });
+                var nav = document.getElementById("nav-dm-" + username);
+                var dot = nav && nav.querySelector(".dm-unread-dot");
+                if (dot) dot.hidden = true;
             }
 
             function triggerAddDM() {
@@ -861,6 +904,7 @@
                 currentMode = mode;
                 currentTarget = target || "";
                 currentHistoryIndex = 0;
+                if (mode === "dm") clearDMUnread(currentTarget);
 
                 if (socket && socket.readyState === WebSocket.OPEN) {
                     socket.send(JSON.stringify({
@@ -1244,7 +1288,10 @@
                     if (!content) continue;
                     var replyQuote = messages[i].querySelector(".reply-quote");
                     if (replyQuote && replyQuote.dataset.replyContext) {
-                        content = "[Reply context: " + replyQuote.dataset.replyContext + "]\n" + content;
+                        conversation.push({
+                            role: "system",
+                            content: "The next message is replying to this earlier message: " + replyQuote.dataset.replyContext.slice(0, 600) + ". Use it as context; do not repeat this note.",
+                        });
                     }
                     conversation.push({
                         role: username === "system" ? "assistant" : "user",
@@ -1256,18 +1303,21 @@
                 if (currentMessage) {
                     var lastMessage = conversation[conversation.length - 1];
                     if (!lastMessage || lastMessage.username !== myUsername || lastMessage.content.indexOf(currentMessage) === -1) {
-                        var currentContent = currentReplyContext
-                            ? "[Reply context: @" + currentReplyContext.username + ": " + currentReplyContext.content + "]\n" + currentMessage
-                            : currentMessage;
+                        if (currentReplyContext) {
+                            conversation.push({
+                                role: "system",
+                                content: "The latest message is replying to @" + currentReplyContext.username + ": " + currentReplyContext.content.slice(0, 600) + ". Use it as context; do not repeat this note.",
+                            });
+                        }
                         conversation.push({
                             role: "user",
-                            content: "@" + myUsername + ": " + currentContent,
+                            content: "@" + myUsername + ": " + currentMessage,
                             username: myUsername
                         });
                     }
                 }
 
-                return conversation.slice(-12).map(function(message) {
+                return conversation.slice(-8).map(function(message) {
                     return {
                         role: message.role,
                         content: message.content
@@ -1368,23 +1418,45 @@
                     if (provider === "custom" && !/^https:\/\//i.test(url)) throw new Error("Custom AI endpoints must use HTTPS.");
                     headers.Authorization = "Bearer " + config.key;
                 }
-                var requestBody = { messages: messages, model: model, max_tokens: 1024, temperature: 1, stream: false };
+                var requestBody = { messages: messages, model: model, max_tokens: assistant === "help" ? 1024 : 2048, temperature: 1, stream: false };
+                if (groqProvider) {
+                    requestBody.max_completion_tokens = requestBody.max_tokens;
+                    delete requestBody.max_tokens;
+                }
                 if (assistant === "help") Object.assign(requestBody, { top_p: 1, top_k: 50, repetition_penalty: 1, frequency_penalty: 0, presence_penalty: 0 });
                 if (url === BACKEND_URL + "/api/ai/cloudflare") requestBody.assistant = assistant;
-                var response = await fetch(url, {
-                    method: "POST",
-                    headers: headers,
-                    body: JSON.stringify(requestBody)
-                });
-                var data = await response.json().catch(function () { return null; });
-                if (groqProvider && (response.status === 429 || response.status === 498)) {
-                    if (!token) throw new Error("Groq is rate-limited; sign in to use the Cloudflare fallback.");
-                    response = await fetch(BACKEND_URL + "/api/ai/cloudflare", {
+                async function requestCloudflareFallback() {
+                    if (!token) throw new Error("The AI provider could not be reached, and server fallback requires signing in.");
+                    var fallbackResponse = await fetch(BACKEND_URL + "/api/ai/cloudflare", {
                         method: "POST",
                         headers: { "Content-Type": "application/json", "Authorization": "Bearer " + token },
-                        body: JSON.stringify({ messages: messages })
+                        body: JSON.stringify({ messages: messages, assistant: assistant })
+                    });
+                    return {
+                        response: fallbackResponse,
+                        data: await fallbackResponse.json().catch(function () { return null; })
+                    };
+                }
+                var response, data;
+                try {
+                    response = await fetch(url, {
+                        method: "POST",
+                        headers: headers,
+                        body: JSON.stringify(requestBody)
                     });
                     data = await response.json().catch(function () { return null; });
+                } catch (fetchError) {
+                    if (!(groqProvider || (provider === "cloudflare" && config.key))) throw fetchError;
+                    if (!token) throw new Error("The AI provider could not be reached from this browser. Sign in to try the server Cloudflare fallback.");
+                    log("Direct AI request failed; trying the server Cloudflare fallback.");
+                    var fallback = await requestCloudflareFallback();
+                    response = fallback.response;
+                    data = fallback.data;
+                }
+                if (groqProvider && (response.status === 429 || response.status === 498)) {
+                    var fallback = await requestCloudflareFallback();
+                    response = fallback.response;
+                    data = fallback.data;
                 }
                 if (!response.ok) {
                     var providerError = data && typeof data.error === "string" ? data.error : data && data.error && data.error.message ? data.error.message : data && Array.isArray(data.errors) ? data.errors.map(function (item) { return item && item.message; }).filter(Boolean).join("; ") : "";
@@ -1405,6 +1477,35 @@
                     const split = Math.max(1, Math.floor(token.length / 2));
                     return token + token.slice(split);
                 }).join("");
+            }
+
+            function parseSystemActions(output) {
+                var source = String(output || "").trim();
+                var candidates = [source];
+                var fenced = source.match(/```(?:json)?\s*([\s\S]*?)```/i);
+                if (fenced) candidates.push(fenced[1].trim());
+                var objectStart = source.indexOf("{");
+                var objectEnd = source.lastIndexOf("}");
+                if (objectStart !== -1 && objectEnd > objectStart) candidates.push(source.slice(objectStart, objectEnd + 1));
+                var arrayStart = source.indexOf("[");
+                var arrayEnd = source.lastIndexOf("]");
+                if (arrayStart !== -1 && arrayEnd > arrayStart) candidates.push(source.slice(arrayStart, arrayEnd + 1));
+                for (var candidate of candidates) {
+                    try {
+                        var parsed = JSON.parse(candidate);
+                        var actions = Array.isArray(parsed) ? parsed : [parsed];
+                        if (actions.length && actions.every(function(action) {
+                            return action && typeof action === "object" && typeof action.action === "string";
+                        })) return actions;
+                    } catch (e) {}
+                }
+                return null;
+            }
+
+            function cleanAIResponse(output) {
+                return /^\s*(?:```|[\[{])/.test(output) && /["']action["']\s*:/.test(output)
+                    ? "I couldn't process that structured response. Please try again."
+                    : output;
             }
 
             async function processHelpAICore(mode, target, currentMessage, messageIdPromise, replyContext) {
@@ -1461,16 +1562,14 @@
                         aiHistory.shift();
                     }
 
-                    try {
-                        var aiActions = JSON.parse(aiOutput);
-                    } catch (e) {
-                        log(e);
+                    var aiActions = parseSystemActions(aiOutput);
+                    if (!aiActions) {
                         // Push packet back to server tagged with the hidden identity verification string
                         if (socket && socket.readyState === WebSocket.OPEN) {
                             socket.send(
                                 JSON.stringify({
                                     type: mode === "public" ? "message" : "dm",
-                                    content: "\u200B[SYSTEM_BOT]\u200B" + aiOutput,
+                                    content: "\u200B[SYSTEM_BOT]\u200B" + cleanAIResponse(aiOutput),
                                     target: target,
                                     reply_to_id: replyToId,
                                 }),
@@ -1478,7 +1577,6 @@
                         }
                         return;
                     }
-                    if (aiActions.action) aiActions = [aiActions]
                     for (var a of aiActions) {
                         if (a.action === "kick") {
                             kickUser(a.username, a.reason);
@@ -1559,11 +1657,9 @@
                         aiHistory.shift();
                     }
 
-                    try {
-                        var aiActions = JSON.parse(aiOutput);
-                    } catch (e) {
-                        log(e);
-                        dispatchSystemResponse(aiOutput, senderUsername, promptMessageId, mode);
+                    var aiActions = parseSystemActions(aiOutput);
+                    if (!aiActions) {
+                        dispatchSystemResponse(cleanAIResponse(aiOutput), senderUsername, promptMessageId, mode);
                         return;
                     }
 

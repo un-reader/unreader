@@ -27,6 +27,11 @@ CREATE TABLE IF NOT EXISTS dms (
   id SERIAL PRIMARY KEY, username TEXT, sender TEXT NOT NULL, receiver TEXT NOT NULL, timestamp TEXT NOT NULL, content TEXT NOT NULL,
   is_deleted BOOLEAN DEFAULT false, deleted_by TEXT, reply_to_id INTEGER
 );
+CREATE TABLE IF NOT EXISTS dm_read_state (
+  username TEXT NOT NULL, peer_username TEXT NOT NULL, last_read_id INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (username, peer_username)
+);
+CREATE TABLE IF NOT EXISTS app_migrations (name TEXT PRIMARY KEY);
 ALTER TABLE messages ADD COLUMN IF NOT EXISTS reply_to_id INTEGER;
 ALTER TABLE dms ADD COLUMN IF NOT EXISTS reply_to_id INTEGER;
 CREATE TABLE IF NOT EXISTS profiles (
@@ -192,4 +197,20 @@ UPDATE topic_messages SET sender = username WHERE sender IS NULL;
 UPDATE neighborhood_posts SET sender = username WHERE sender IS NULL;
 UPDATE neighborhood_comments SET sender = username WHERE sender IS NULL;
 UPDATE dms SET username = sender WHERE username IS NULL;
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM app_migrations WHERE name = 'dm_read_state_baseline_v1') THEN
+    INSERT INTO dm_read_state (username, peer_username, last_read_id)
+    SELECT participant, peer, MAX(id)
+    FROM (
+      SELECT sender AS participant, receiver AS peer, id FROM dms
+      UNION ALL
+      SELECT receiver AS participant, sender AS peer, id FROM dms
+    ) conversations
+    GROUP BY participant, peer
+    ON CONFLICT (username, peer_username) DO NOTHING;
+    INSERT INTO app_migrations (name) VALUES ('dm_read_state_baseline_v1')
+    ON CONFLICT (name) DO NOTHING;
+  END IF;
+END $$;
 `;

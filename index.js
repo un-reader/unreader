@@ -595,7 +595,7 @@ app.post('/api/ai/cloudflare', authenticateToken, async (req, res) => {
         body: JSON.stringify({
           model: assistant === 'help' ? '@cf/meta/llama-4-scout-17b-16e-instruct' : '@cf/qwen/qwen3.8-27b',
           messages,
-          max_tokens: assistant === 'help' ? 1024 : 4096,
+          max_tokens: assistant === 'help' ? 1024 : 2048,
           temperature: 1,
           ...(assistant === 'help' ? {
             top_p: 1,
@@ -1207,10 +1207,22 @@ function getRosterPayload() {
 
 app.get('/dm-contacts', authenticateToken, async (req, res) => {
   const result = await db.query(
-    `SELECT DISTINCT username FROM (SELECT receiver AS username FROM dms WHERE sender = $1 UNION SELECT sender AS username FROM dms WHERE receiver = $1) AS c WHERE username != $1;`,
+    `WITH contacts AS (
+       SELECT receiver AS username FROM dms WHERE sender = $1
+       UNION
+       SELECT sender AS username FROM dms WHERE receiver = $1
+     )
+     SELECT c.username,
+       EXISTS (
+         SELECT 1 FROM dms d
+         LEFT JOIN dm_read_state s ON s.username = $1 AND s.peer_username = c.username
+         WHERE d.sender = c.username AND d.receiver = $1 AND d.is_deleted = false
+           AND d.id > COALESCE(s.last_read_id, 0)
+       ) AS unread
+     FROM contacts c WHERE c.username != $1;`,
     [req.user.username],
   );
-  res.json(result.rows.map((r) => r.username));
+  res.json(result.rows);
 });
 
 const PET_PNG_PREFIX = 'data:image/png;base64,';
@@ -3851,11 +3863,38 @@ wss.on('connection', (ws, req) => {
       }
       if (!authUser) return;
 
+      if (data.type === 'dm_mark_read') {
+        const peer = sanitizeUsername(data.peer);
+        if (!peer || peer === authUser || !Number.isSafeInteger(data.id) || data.id < 1) return;
+        await db.query(
+          `INSERT INTO dm_read_state (username, peer_username, last_read_id)
+           SELECT $1, $2, id FROM dms
+           WHERE id = $3 AND sender = $2 AND receiver = $1
+           ON CONFLICT (username, peer_username) DO UPDATE
+           SET last_read_id = GREATEST(dm_read_state.last_read_id, EXCLUDED.last_read_id);`,
+          [authUser, peer, data.id],
+        );
+        return;
+      }
+
       if (data.type === 'switch_context') {
         const client = activeClients.get(authUser);
         if (client) {
           client.mode = data.mode;
           client.target = data.target;
+          if (data.mode === 'dm') {
+            const peer = sanitizeUsername(data.target);
+            if (peer && peer !== authUser) {
+              await db.query(
+                `INSERT INTO dm_read_state (username, peer_username, last_read_id)
+                 SELECT $1, $2, COALESCE(MAX(id), 0) FROM dms
+                 WHERE (sender = $1 AND receiver = $2) OR (sender = $2 AND receiver = $1)
+                 ON CONFLICT (username, peer_username) DO UPDATE
+                 SET last_read_id = GREATEST(dm_read_state.last_read_id, EXCLUDED.last_read_id);`,
+                [authUser, peer],
+              );
+            }
+          }
           broadcastSystemUpdate(getRosterPayload());
         }
         return;
@@ -4119,16 +4158,20 @@ wss.on('connection', (ws, req) => {
         }
 
         if (livePayload) {
-          broadcastSystemUpdate(livePayload, (c, username) => {
-            if (mode === 'dm') {
-              return (
-                c.mode === 'dm' &&
-                c.target === (username === authUser ? target : authUser) &&
-                (username === authUser || username === target)
-              );
+          if (mode === 'dm') {
+            for (const [username, client] of activeClients) {
+              if (username !== authUser && username !== target) continue;
+              if (client.ws.readyState !== WebSocket.OPEN || client.ws.bufferedAmount > 1024 * 1024) continue;
+              const peer = username === authUser ? target : authUser;
+              if (client.mode === 'dm' && client.target === peer) {
+                client.ws.send(JSON.stringify(livePayload));
+              } else if (username === target) {
+                client.ws.send(JSON.stringify({ type: 'dm_unread', username: authUser }));
+              }
             }
-            return c.mode === mode && c.target === target;
-          });
+          } else {
+            broadcastSystemUpdate(livePayload, (client) => client.mode === mode && client.target === target);
+          }
         } else if (data.type === 'neighborhood_comment') {
           broadcastSystemUpdate(
             { type: 'refresh_feed' },
