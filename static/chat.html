@@ -28,6 +28,12 @@
             src: url('./DTM-Mono.ttf') format('truetype');
         }
 
+        .window {
+            box-sizing: border-box;
+            width: 94vw;
+            height: 94vh;
+        }
+
         #active-users {
             display: flex;
             justify-content: space-between;
@@ -112,6 +118,16 @@
 
         #input-bar-container {
             flex-wrap: wrap;
+        }
+
+        #chat-cell,
+        #chat-scroll-wrapper {
+            min-width: 0;
+            min-height: 0;
+        }
+
+        #content {
+            min-width: 0;
         }
 
         #reply-context {
@@ -1333,7 +1349,7 @@
                     var replyQuote = messages[i].querySelector(".reply-quote");
                     if (replyQuote && replyQuote.dataset.replyContext) {
                         conversation.push({
-                            role: "system",
+                            role: "user",
                             content: "The next message is replying to this earlier message: " + replyQuote.dataset.replyContext.slice(0, 600) + ". Use it as context; do not repeat this note.",
                         });
                     }
@@ -1349,7 +1365,7 @@
                     if (!lastMessage || lastMessage.username !== myUsername || lastMessage.content.indexOf(currentMessage) === -1) {
                         if (currentReplyContext) {
                             conversation.push({
-                                role: "system",
+                                role: "user",
                                 content: "The latest message is replying to @" + currentReplyContext.username + ": " + currentReplyContext.content.slice(0, 600) + ". Use it as context; do not repeat this note.",
                             });
                         }

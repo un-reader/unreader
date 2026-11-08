@@ -574,6 +574,16 @@ app.post('/api/ai/cloudflare', authenticateToken, async (req, res) => {
     !message || !['system', 'user', 'assistant'].includes(message.role) ||
     typeof message.content !== 'string' || message.content.length > 20000
   )) return res.status(400).json({ error: 'Invalid AI messages.' });
+  const firstSystemIndex = messages.findIndex((message) => message.role === 'system');
+  const cloudflareMessages = [];
+  if (firstSystemIndex !== -1) cloudflareMessages.push(messages[firstSystemIndex]);
+  for (let i = 0; i < messages.length; i++) {
+    if (i === firstSystemIndex) continue;
+    const message = messages[i];
+    cloudflareMessages.push(message.role === 'system'
+      ? { role: 'user', content: message.content }
+      : message);
+  }
   const now = Date.now();
   const usage = cloudflareAiUsage.get(req.user.username);
   if (usage && now - usage.startedAt < 60000 && usage.count >= 10)
@@ -594,7 +604,7 @@ app.post('/api/ai/cloudflare', authenticateToken, async (req, res) => {
         },
         body: JSON.stringify({
           model: assistant === 'help' ? '@cf/meta/llama-4-scout-17b-16e-instruct' : '@cf/qwen/qwen3.8-27b',
-          messages,
+          messages: cloudflareMessages,
           max_tokens: assistant === 'help' ? 1024 : 2048,
           temperature: 1,
           ...(assistant === 'help' ? {
