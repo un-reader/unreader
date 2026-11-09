@@ -1409,27 +1409,21 @@ app.post('/api/pet-packs/merge', authenticateToken, async (req, res) => {
       await client.query('ROLLBACK');
       return res.status(404).json({ error: 'One or more selected Pet Packs were not found.' });
     }
-    if (selected.rows.some((pack) => pack.version_root_id !== null || pack.is_official)) {
+    if (selected.rows.some((pack) => pack.version_root_id !== null)) {
       await client.query('ROLLBACK');
-      return res.status(409).json({ error: 'Unlink older versions and remove Official status before combining these packs.' });
-    }
-    const older = await client.query('SELECT 1 FROM pet_packs WHERE version_root_id = ANY($1::int[]) LIMIT 1;', [ids]);
-    if (older.rowCount) {
-      await client.query('ROLLBACK');
-      return res.status(409).json({ error: 'Remove or regroup older versions before combining these packs.' });
+      return res.status(409).json({ error: 'Select the current version of each Pet Pack.' });
     }
     const packsById = new Map(selected.rows.map((pack) => [pack.id, pack]));
     const pets = ids.flatMap((id) => parsePetPackData(packsById.get(id).pack_data) || []);
     const packData = normalizePetPackData(pets);
     if (!packData) {
       await client.query('ROLLBACK');
-      return res.status(400).json({ error: 'The combined Pet Pack would exceed the 12-pet or size limit.' });
+      return res.status(400).json({ error: 'The new Pet Pack would exceed the 12-pet or size limit.' });
     }
     const created = await client.query(
       'INSERT INTO pet_packs (name, created_by, pack_data, date_release) VALUES ($1, $2, $3, CURRENT_DATE) RETURNING id;',
       [name, req.user.username, packData],
     );
-    await client.query('DELETE FROM pet_packs WHERE id = ANY($1::int[]);', [ids]);
     await client.query('COMMIT');
     res.status(201).json({ success: true, id: created.rows[0].id });
   } catch (err) {

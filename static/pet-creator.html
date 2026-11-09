@@ -194,12 +194,13 @@
         <div id="pet-panel-official" class="pet-list" role="tabpanel" aria-labelledby="pet-tab-official" aria-live="polite" hidden></div>
         <div id="pet-panel-local" class="pet-list" role="tabpanel" aria-labelledby="pet-tab-local" aria-live="polite" hidden></div>
         <details id="pet-admin-tools" class="pet-admin-tools" hidden>
-          <summary>ADMIN PET PACKS!</summary>
+          <summary>ADMIN PACK CURATION</summary>
+          <p>Create a curated Pet Pack from current versions of existing packs. Source packs stay published.</p>
           <label for="pet-merge-name">New Pet Pack name</label>
-          <input id="pet-merge-name" maxlength="255" placeholder="Combined Pet Pack">
-          <label for="pet-merge-sources">Combine existing packs</label>
+          <input id="pet-merge-name" maxlength="255" placeholder="Curated Pet Pack">
+          <label for="pet-merge-sources">Add pets from these current packs (up to 12 pets total)</label>
           <select id="pet-merge-sources" multiple size="6"></select>
-          <button id="pet-merge-packs" type="button" class="paper-btn">COMBINE SELECTED PACKS</button>
+          <button id="pet-merge-packs" type="button" class="paper-btn">CREATE CURATED PACK</button>
           <label for="pet-version-root">Latest Pet Pack / root</label>
           <select id="pet-version-root"></select>
           <label for="pet-version-older">Older pet packs to attach</label>
@@ -1208,9 +1209,7 @@
       tools.hidden = !canManageOfficial;
       if (!canManageOfficial) return;
       updatePackOptions(document.getElementById('pet-merge-sources'), libraryPacks.filter(function (pack) {
-        var isRoot = pack.version_root_id === null || pack.version_root_id === undefined;
-        var hasVersions = libraryPacks.some(function (version) { return Number(version.version_root_id) === Number(pack.id); });
-        return !pack.is_official && isRoot && !hasVersions;
+        return pack.version_root_id === null || pack.version_root_id === undefined;
       }));
       var versionRoots = libraryPacks.filter(function (pack) {
         return pack.version_root_id === null || pack.version_root_id === undefined;
@@ -1256,7 +1255,7 @@
       }
       var status = document.getElementById('pet-admin-status');
       if (!name || sourceIds.length < 2) {
-        status.textContent = 'Name the new Pet Pack and select at least two packs to combine.';
+        status.textContent = 'Name the curated Pet Pack and select at least two current packs.';
         return;
       }
       try {
@@ -1264,7 +1263,7 @@
           method: 'POST',
           body: JSON.stringify({ name: name, source_ids: sourceIds }),
         });
-        status.textContent = 'Combined ' + sourceIds.length + ' packs into ' + name + '.';
+        status.textContent = 'Created ' + name + ' from ' + sourceIds.length + ' packs. Source packs remain available.';
         document.getElementById('pet-merge-name').value = '';
         await loadPetLibrary();
       } catch (error) {
