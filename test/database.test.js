@@ -85,6 +85,7 @@ test('real PostgreSQL bootstrap, failover, recovery, restart and serverless tran
   }
   try {
     for (const [index, admin] of admins.entries()) await admin.query(`CREATE DATABASE ${name}_${index};`);
+    await checks[0].query("CREATE TABLE pets (\"pet-name\" VARCHAR(255), \"created-by\" VARCHAR(255), \"pet-data\" TEXT, \"date-release\" DATE); INSERT INTO pets VALUES ('Legacy Pet', 'replica_seed', '{}', '2026-10-28');");
     await checks[0].query(schema);
     await checks[0].query("INSERT INTO users (username, password_hash, timeout_until) VALUES ('replica_seed', 'test', 9007199254740993); INSERT INTO profiles (username, bio) VALUES ('replica_seed', 'seed profile');");
     await checks[0].query("ALTER TABLE roles ALTER COLUMN class DROP NOT NULL; INSERT INTO roles (role, prefix, style, class) VALUES ('legacy_role', '', '', NULL);");
@@ -93,6 +94,8 @@ test('real PostgreSQL bootstrap, failover, recovery, restart and serverless tran
     await equalRows('users');
     await equalRows('profiles');
     await equalRows('roles');
+    await equalRows('pet_packs');
+    assert.equal((await db.query("SELECT name FROM pet_packs WHERE legacy_pet_id IS NOT NULL;")).rows[0].name, 'Legacy Pet');
     assert.equal((await db.query("SELECT timeout_until FROM users WHERE username = 'replica_seed';")).rows[0].timeout_until, '9007199254740993');
     t.diagnostic('Bootstrap copied the existing Neon database into the empty replica.');
 
@@ -104,8 +107,8 @@ test('real PostgreSQL bootstrap, failover, recovery, restart and serverless tran
     const inserted = await db.query("INSERT INTO messages (username, timestamp, content) VALUES ('replica_seed', 'now', 'during Neon outage') RETURNING id;");
     assert.equal(db.status().active, 'layerbase');
     await db.query('UPDATE messages SET content = $1 WHERE id = $2;', ['edited during outage', inserted.rows[0].id]);
-    await db.query("INSERT INTO pets VALUES ('duplicate', 'replica_seed', '{}', '2026-10-28'), ('duplicate', 'replica_seed', '{}', '2026-10-28');");
-    await db.query("DELETE FROM pets WHERE ctid = (SELECT ctid FROM pets LIMIT 1);");
+    await db.query("INSERT INTO pet_packs (name, created_by, pack_data, date_release) VALUES ('duplicate', 'replica_seed', '[]', '2026-10-28'), ('duplicate', 'replica_seed', '[]', '2026-10-28');");
+    await db.query("DELETE FROM pet_packs WHERE ctid = (SELECT ctid FROM pet_packs LIMIT 1);");
     await db.end();
     db = makeDatabase();
     await db.initialize();
@@ -113,7 +116,7 @@ test('real PostgreSQL bootstrap, failover, recovery, restart and serverless tran
     down[0] = false;
     await recovered();
     await equalRows('messages');
-    await equalRows('pets');
+    await equalRows('pet_packs');
     t.diagnostic('Neon outage, durable restart and recovery preserved inserts, updates and duplicate keyless rows.');
 
     down[1] = true;

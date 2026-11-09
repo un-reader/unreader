@@ -43,12 +43,46 @@ CREATE TABLE IF NOT EXISTS profile_images (
   "user" TEXT NOT NULL DEFAULT 'user'
 );
 ALTER TABLE profile_images ADD COLUMN IF NOT EXISTS "user" TEXT NOT NULL DEFAULT 'user';
-CREATE TABLE IF NOT EXISTS pets (
-  "pet-name" VARCHAR(255),
-  "created-by" VARCHAR(255),
-  "pet-data" TEXT,
-  "date-release" DATE
+CREATE TABLE IF NOT EXISTS pet_packs (
+  id SERIAL PRIMARY KEY,
+  name VARCHAR(255) NOT NULL,
+  created_by VARCHAR(255) NOT NULL,
+  pack_data TEXT NOT NULL,
+  date_release DATE NOT NULL DEFAULT CURRENT_DATE,
+  is_official BOOLEAN NOT NULL DEFAULT false,
+  version_root_id INTEGER,
+  legacy_pet_id INTEGER
 );
+ALTER TABLE pet_packs ADD COLUMN IF NOT EXISTS name VARCHAR(255);
+ALTER TABLE pet_packs ADD COLUMN IF NOT EXISTS created_by VARCHAR(255);
+ALTER TABLE pet_packs ADD COLUMN IF NOT EXISTS pack_data TEXT;
+ALTER TABLE pet_packs ADD COLUMN IF NOT EXISTS date_release DATE DEFAULT CURRENT_DATE;
+ALTER TABLE pet_packs ADD COLUMN IF NOT EXISTS is_official BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE pet_packs ADD COLUMN IF NOT EXISTS version_root_id INTEGER;
+ALTER TABLE pet_packs ADD COLUMN IF NOT EXISTS legacy_pet_id INTEGER;
+CREATE UNIQUE INDEX IF NOT EXISTS pet_packs_legacy_pet_idx ON pet_packs (legacy_pet_id);
+CREATE INDEX IF NOT EXISTS pet_packs_version_root_idx ON pet_packs (version_root_id);
+DO $$ BEGIN
+  IF to_regclass('public.pets') IS NOT NULL THEN
+    ALTER TABLE pets ADD COLUMN IF NOT EXISTS id SERIAL;
+    ALTER TABLE pets ADD COLUMN IF NOT EXISTS is_official BOOLEAN NOT NULL DEFAULT false;
+    ALTER TABLE pets ADD COLUMN IF NOT EXISTS version_root_id INTEGER;
+    INSERT INTO pet_packs (name, created_by, pack_data, date_release, is_official, legacy_pet_id)
+    SELECT p."pet-name", p."created-by",
+           json_build_array(json_build_object('name', p."pet-name", 'pet_data', p."pet-data"))::text,
+           COALESCE(p."date-release", CURRENT_DATE), COALESCE(p.is_official, false), p.id
+      FROM pets p
+     WHERE p.id IS NOT NULL AND p."pet-name" IS NOT NULL AND p."created-by" IS NOT NULL
+       AND p."pet-data" IS NOT NULL
+    ON CONFLICT (legacy_pet_id) DO NOTHING;
+    UPDATE pet_packs older
+       SET version_root_id = latest.id
+      FROM pets old_pet
+      JOIN pet_packs latest ON latest.legacy_pet_id = old_pet.version_root_id
+     WHERE older.legacy_pet_id = old_pet.id AND old_pet.version_root_id IS NOT NULL;
+    DROP TABLE pets;
+  END IF;
+END $$;
 CREATE TABLE IF NOT EXISTS topics (
   id SERIAL PRIMARY KEY, slug TEXT UNIQUE NOT NULL, title TEXT NOT NULL, username TEXT NOT NULL, timestamp TEXT NOT NULL
 );
