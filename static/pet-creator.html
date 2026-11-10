@@ -196,8 +196,8 @@
 
       <section id="shell-panel-library" class="shell-panel" role="tabpanel" aria-labelledby="shell-tab-library" hidden>
         <div class="pet-tabs" role="tablist" aria-label="Pet library">
-          <button id="pet-tab-community" type="button" class="paper-btn" role="tab" aria-selected="true" aria-controls="pet-panel-community">COMMUNITY PETS &amp; PACKS</button>
           <button id="pet-tab-official" type="button" class="paper-btn" role="tab" aria-selected="false" aria-controls="pet-panel-official">OFFICIAL PETS &amp; PACKS</button>
+          <button id="pet-tab-community" type="button" class="paper-btn" role="tab" aria-selected="true" aria-controls="pet-panel-community">COMMUNITY PETS &amp; PACKS</button>
           <button id="pet-tab-local" type="button" class="paper-btn" role="tab" aria-selected="false" aria-controls="pet-panel-local">MY PETS</button>
         </div>
         <div id="pet-panel-community" class="pet-list" role="tabpanel" aria-labelledby="pet-tab-community" aria-live="polite"></div>
@@ -1269,6 +1269,18 @@
       }
     }
 
+    async function updateInstalledPet(packId) {
+      try {
+        var result = await petApi('/api/pet-packs/' + encodeURIComponent(packId));
+        var installed = getInstalledPack();
+        var pet = result.pack.pets.find(function (item) { return installed && item.name === installed.petName; }) || result.pack.pets[0];
+        if (!pet) throw new Error('The current version has no pets to install.');
+        await usePet(pet, { packId: result.pack.id, versionId: result.viewing_version_id, packName: result.pack.name });
+      } catch (error) {
+        document.getElementById('pet-status').textContent = error.message;
+      }
+    }
+
     function summarizePackChanges(oldPets, newPets) {
       var oldMap = {};
       var newMap = {};
@@ -1327,11 +1339,15 @@
         var banner = el('p', 'pet-detail-banner',
           'Viewing older version v' + (viewingVersion ? viewingVersion.version_number : '?') + '. Current version: v' + currentVersion.version_number + '.');
         banner.appendChild(btn('BACK TO CURRENT ' + (isSinglePet ? 'PET' : 'PACK') + ' VERSION', function () { openPackDetail(pack.id); }));
+        if (packHasUpdate({ id: pack.id, version_ids: versionIds })) {
+          banner.appendChild(btn('UPDATE TO LATEST', function () { updateInstalledPet(pack.id); }));
+        }
         container.appendChild(banner);
       } else if (packHasUpdate({ id: pack.id, version_ids: versionIds })) {
-        container.appendChild(el('p', 'pet-detail-banner',
-          'You installed ' + installedVersionLabel({ id: pack.id, version_ids: versionIds }) +
-          '. A newer version is available — re-install a pet below to update.'));
+        var updateBanner = el('p', 'pet-detail-banner',
+          'You installed ' + installedVersionLabel({ id: pack.id, version_ids: versionIds }) + '. A newer version is available.');
+        updateBanner.appendChild(btn('UPDATE TO LATEST', function () { updateInstalledPet(pack.id); }));
+        container.appendChild(updateBanner);
       }
       if (pack.version_note) {
         container.appendChild(el('p', 'pet-pack-note', 'Latest change: ' + pack.version_note));
