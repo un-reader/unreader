@@ -369,7 +369,8 @@
       <div class="setting-item">
         <div>
           <div class="setting-label">@system provider</div>
-          <div class="setting-desc">Choose Qwen, a server-managed model, or use your own provider key from this browser.</div>
+          <div class="setting-desc">Choose Qwen, a server-managed model, or use your own provider key from this browser.
+          </div>
         </div>
         <select id="system-ai-provider" class="kindle-input" style="width:auto; min-width:190px;">
           <option value="qwen">Qwen (managed)</option>
@@ -382,20 +383,25 @@
       </div>
       <div id="system-ai-key-settings" style="display:none; padding:8px 0;">
         <label for="system-ai-key" class="setting-label">Personal API key</label>
-        <input id="system-ai-key" class="kindle-input" type="password" autocomplete="off" placeholder="Paste your provider key" />
+        <input id="system-ai-key" class="kindle-input" type="password" autocomplete="off"
+          placeholder="Paste your provider key" />
         <div id="system-ai-account-wrap" style="display:none;">
           <label for="system-ai-account" class="setting-label">Cloudflare Account ID</label>
-          <input id="system-ai-account" class="kindle-input" type="text" autocomplete="off" placeholder="32-character account ID" />
+          <input id="system-ai-account" class="kindle-input" type="text" autocomplete="off"
+            placeholder="32-character account ID" />
         </div>
         <label for="system-ai-model" class="setting-label">Model ID</label>
-        <input id="system-ai-model" class="kindle-input" type="text" autocomplete="off" placeholder="Provider model ID" />
+        <input id="system-ai-model" class="kindle-input" type="text" autocomplete="off"
+          placeholder="Provider model ID" />
         <div id="system-ai-endpoint-wrap" style="display:none;">
           <label for="system-ai-endpoint" class="setting-label">OpenAI-compatible endpoint</label>
-          <input id="system-ai-endpoint" class="kindle-input" type="url" autocomplete="off" placeholder="https://provider.example/v1/chat/completions" />
+          <input id="system-ai-endpoint" class="kindle-input" type="url" autocomplete="off"
+            placeholder="https://provider.example/v1/chat/completions" />
         </div>
         <button id="system-ai-save" class="retro-btn">SAVE AI SETTINGS</button>
         <button id="system-ai-clear" class="retro-btn">CLEAR PERSONAL KEY</button>
-        <div class="setting-desc">Your personal key is saved in this browser only and sent directly to its provider.</div>
+        <div class="setting-desc">Your personal key is saved in this browser only and sent directly to its provider.
+        </div>
       </div>
       <div id="system-ai-status" class="setting-desc" aria-live="polite"></div>
     </div>
@@ -481,6 +487,7 @@
       { name: 'CHAT', desc: 'Now with... less pixels?', url: 'chat.html' },
       { name: 'TOPICS', desc: 'Discuss anything!', url: 'topics.html' },
       { name: 'NEIGHBOURHOOD', desc: 'Posts! Share your thoughts!', url: 'neighbourhood.html' },
+      { name: 'UN-CORD', desc: 'un-reader Discord server on un-reader web!', url: 'discord.html' },
       { name: 'Un-Cloud', desc: 'Run virtual machines online! (BETA)', url: 'https://undroid-server.onrender.com/' },
       { name: 'AI ASSISTANT', desc: 'AI Assistant (Beta)', url: 'chatai.html' },
       { name: 'GITHUB', desc: 'Manage and edit GitHub repos on e-ink.', url: 'github.htm' }
@@ -618,7 +625,7 @@
       custom: { model: '' }
     };
     let aiConfig = {};
-    try { aiConfig = JSON.parse(localStorage.getItem(aiConfigKey) || '{}'); } catch (e) {}
+    try { aiConfig = JSON.parse(localStorage.getItem(aiConfigKey) || '{}'); } catch (e) { }
     if (!aiConfig || typeof aiConfig !== 'object') aiConfig = {};
     if (['qwen', 'cloudflare', 'groq', 'openai', 'openrouter', 'custom'].includes(aiConfig.provider)) aiProvider.value = aiConfig.provider;
     document.getElementById('system-ai-key').value = aiConfig.key || '';

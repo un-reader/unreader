@@ -1,0 +1,49 @@
+import { Client, Events, GatewayIntentBits } from 'discord.js';
+import { log } from './shared.js';
+
+let callback = msg => log('Discord bot received a message:', msg)
+let send2General
+
+const dc = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent] })
+let general
+
+dc.on(Events.MessageCreate, async msg => {
+  if (msg.author.bot) return;
+  if (msg.channelId !== process.env.DISCORD_CHANNEL_ID) return;
+  switch (msg.content) {
+    case 'All hail The Great tockdev!':
+      msg.reply(':saluting_face:')
+      return
+    case 'lmao u can put some ARG in this switch statement for the bot to reply to, this is an example':
+      msg.reply('secret dev talk')
+      return
+    default:
+      callback({
+        content: msg.content,
+        username: msg.author.displayName
+      })
+  }
+})
+
+export async function initDiscord(inboundCallback) {
+  await dc.login(process.env.DISCORD_TOKEN)
+  callback = inboundCallback
+  return {
+    send:
+      await new Promise(res => {
+        dc.on(Events.ClientReady, async client => {
+          general = await client.channels.fetch(process.env.DISCORD_CHANNEL_ID)
+          send2General = text => {
+            general.send(text)
+          }
+          res(send2General)
+        })
+      })
+  }
+}
+
+// Standalone test
+if (import.meta.main) {
+  const bot = await initDiscord(message => log(message.content))
+  // bot.send('un-cord is up and running!')
+}
