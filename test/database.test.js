@@ -86,8 +86,30 @@ test('real PostgreSQL bootstrap, failover, recovery, restart and serverless tran
   try {
     for (const [index, admin] of admins.entries()) await admin.query(`CREATE DATABASE ${name}_${index};`);
     await checks[0].query("CREATE TABLE pets (\"pet-name\" VARCHAR(255), \"created-by\" VARCHAR(255), \"pet-data\" TEXT, \"date-release\" DATE); INSERT INTO pets VALUES ('Legacy Pet', 'replica_seed', '{}', '2026-10-28');");
+    await checks[0].query(`
+      CREATE TABLE users (
+        id SERIAL PRIMARY KEY, username TEXT UNIQUE NOT NULL, password_hash TEXT NOT NULL,
+        timeout_until BIGINT DEFAULT 0, is_banned BOOLEAN DEFAULT false, roles TEXT NOT NULL DEFAULT '[]'
+      );
+      INSERT INTO users (username, password_hash) VALUES ('replica_seed', 'test');
+      CREATE TABLE pet_packs (
+        id SERIAL PRIMARY KEY, name VARCHAR(255) NOT NULL, created_by VARCHAR(255) NOT NULL,
+        pack_data TEXT NOT NULL, date_release DATE NOT NULL DEFAULT CURRENT_DATE,
+        is_official BOOLEAN NOT NULL DEFAULT false, version_root_id INTEGER, legacy_pet_id INTEGER,
+        version_note TEXT, thumb TEXT, pet_count INTEGER
+      );
+      INSERT INTO pet_packs (id, name, created_by, pack_data, version_root_id)
+      VALUES (9000, 'Pack v2', 'replica_seed', '[]', NULL), (9001, 'Pack v1', 'replica_seed', '[]', 9000);
+      CREATE TABLE pet_pack_installs (
+        username TEXT NOT NULL REFERENCES users(username) ON DELETE CASCADE,
+        pack_root_id INTEGER NOT NULL, version_id INTEGER NOT NULL,
+        first_at BIGINT NOT NULL, last_at BIGINT NOT NULL,
+        PRIMARY KEY (username, pack_root_id)
+      );
+      INSERT INTO pet_pack_installs VALUES ('replica_seed', 9000, 9000, 10, 20), ('replica_seed', 9001, 9001, 5, 30);
+    `);
     await checks[0].query(schema);
-    await checks[0].query("INSERT INTO users (username, password_hash, timeout_until) VALUES ('replica_seed', 'test', 9007199254740993); INSERT INTO profiles (username, bio) VALUES ('replica_seed', 'seed profile');");
+    await checks[0].query("INSERT INTO users (username, password_hash, timeout_until) VALUES ('replica_seed', 'test', 9007199254740993) ON CONFLICT (username) DO UPDATE SET timeout_until = EXCLUDED.timeout_until; INSERT INTO profiles (username, bio) VALUES ('replica_seed', 'seed profile');");
     await checks[0].query("ALTER TABLE roles ALTER COLUMN class DROP NOT NULL; INSERT INTO roles (role, prefix, style, class) VALUES ('legacy_role', '', '', NULL);");
     db = makeDatabase();
     await db.initialize();
@@ -96,6 +118,9 @@ test('real PostgreSQL bootstrap, failover, recovery, restart and serverless tran
     await equalRows('roles');
     await equalRows('pet_packs');
     assert.equal((await db.query("SELECT name FROM pet_packs WHERE legacy_pet_id IS NOT NULL;")).rows[0].name, 'Legacy Pet');
+    const migratedInstall = await db.query("SELECT pack_root_id, version_id, first_at, last_at FROM pet_pack_installs WHERE username = 'replica_seed';");
+    assert.deepEqual(migratedInstall.rows, [{ pack_root_id: 9000, version_id: 9001, first_at: '5', last_at: '30' }]);
+    await equalRows('pet_pack_installs');
     assert.equal((await db.query("SELECT timeout_until FROM users WHERE username = 'replica_seed';")).rows[0].timeout_until, '9007199254740993');
     t.diagnostic('Bootstrap copied the existing Neon database into the empty replica.');
 

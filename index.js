@@ -1313,6 +1313,19 @@ const PET_PACK_MAX_ITEMS = 12;
 const PET_PACK_MAX_DATA_CHARS = 12000000;
 const PET_PACK_MAX_PER_USER = 25;
 
+async function petPackPublishingUsage(queryable, username) {
+  const result = await queryable.query(
+    'SELECT COUNT(*)::int AS count FROM pet_packs WHERE created_by = $1 AND version_root_id IS NULL;',
+    [username],
+  );
+  return result.rows[0].count;
+}
+
+async function lockPetPackPublishingUsage(client, username) {
+  await client.query('SELECT username FROM users WHERE username = $1 FOR UPDATE;', [username]);
+  return petPackPublishingUsage(client, username);
+}
+
 function normalizePetPackData(value) {
   if (!Array.isArray(value) || !value.length || value.length > PET_PACK_MAX_ITEMS)
     return null;
@@ -1337,26 +1350,175 @@ function parsePetPackData(value) {
   }
 }
 
+// Extract a single representative frame (first pet's first frame) for list thumbnails.
+function extractPetThumb(packData) {
+  const pets = parsePetPackData(packData);
+  if (!Array.isArray(pets) || !pets.length) return { thumb: null, petCount: 0 };
+  const first = pets.find((pet) => pet && typeof pet.pet_data === 'string');
+  let thumb = null;
+  if (first) {
+    try {
+      const frames = JSON.parse(first.pet_data);
+      const list = Array.isArray(frames)
+        ? frames
+        : frames && Array.isArray(frames.frames)
+          ? frames.frames
+          : [];
+      thumb =
+        list.find(
+          (frame) => typeof frame === 'string' && frame.indexOf('data:image/png;base64,') === 0,
+        ) || null;
+    } catch {
+      thumb = null;
+    }
+  }
+  return { thumb, petCount: pets.length };
+}
+
+function sanitizePetPackNote(value) {
+  if (typeof value !== 'string') return null;
+  const note = value.trim();
+  if (!note) return null;
+  return note.length > 500 ? note.slice(0, 500) : note;
+}
+
+// Older packs predate the thumb/pet_count columns; fill them in on first metadata read.
+async function backfillPetPackThumbs(rows) {
+  const missing = rows.filter((row) => row.thumb === null || row.pet_count === null);
+  if (!missing.length) return;
+  const dataResult = await db.query(
+    'SELECT id, pack_data FROM pet_packs WHERE id = ANY($1::int[]);',
+    [missing.map((row) => row.id)],
+  );
+  for (const row of dataResult.rows) {
+    const info = extractPetThumb(row.pack_data);
+    rows.forEach((listed) => {
+      if (listed.id !== row.id) return;
+      if (listed.thumb === null) listed.thumb = info.thumb;
+      if (listed.pet_count === null) listed.pet_count = info.petCount;
+    });
+    await db
+      .query('UPDATE pet_packs SET thumb = $2, pet_count = $3 WHERE id = $1;', [
+        row.id,
+        info.thumb,
+        info.petCount,
+      ])
+      .catch(() => {});
+  }
+}
+
+async function petPackVersionMap(rootIds) {
+  if (!rootIds.length) return {};
+  const versionRows = await db.query(
+    `SELECT version_root_id AS root_id,
+            array_agg(id ORDER BY date_release DESC, id DESC) AS version_ids,
+            COUNT(*)::int AS child_count
+       FROM pet_packs
+      WHERE version_root_id = ANY($1::int[])
+      GROUP BY version_root_id;`,
+    [rootIds],
+  );
+  const versionMap = {};
+  versionRows.rows.forEach((row) => {
+    versionMap[row.root_id] = {
+      ids: row.version_ids || [],
+      count: (row.child_count || 0) + 1,
+    };
+  });
+  return versionMap;
+}
+
+async function petPackUseMap(rootIds) {
+  if (!rootIds.length) return {};
+  const useRows = await db.query(
+    'SELECT pack_root_id, COUNT(*)::int AS count FROM pet_pack_installs WHERE pack_root_id = ANY($1::int[]) GROUP BY pack_root_id;',
+    [rootIds],
+  );
+  const useMap = {};
+  useRows.rows.forEach((row) => {
+    useMap[row.pack_root_id] = row.count;
+  });
+  return useMap;
+}
+
+
 app.get('/api/pet-packs', authenticateToken, async (req, res) => {
   try {
-    const result = await db.query(
-      `SELECT id, name, created_by, pack_data, TO_CHAR(date_release, 'YYYY-MM-DD') AS date_release,
-              is_official, version_root_id
-         FROM pet_packs
-        ORDER BY is_official DESC, date_release DESC, id DESC
-        LIMIT 100;`,
+    const q = typeof req.query.q === 'string' ? req.query.q.trim().slice(0, 100) : '';
+    const scope = typeof req.query.scope === 'string' ? req.query.scope : '';
+    const includeVersions = req.query.include_versions === 'true';
+    if (req.query.page === undefined && req.query.limit === undefined && !scope && !q && !includeVersions)
+      return res.status(410).json({ error: 'The unpaginated Pet Pack list is retired. Request a paginated metadata list.' });
+    if (includeVersions && !hasAdminPrivileges(req.user))
+      return res.status(403).json({ error: 'Only administrators can list Pet Pack versions.' });
+    const publishing = {
+      used: await petPackPublishingUsage(db, req.user.username),
+      max: PET_PACK_MAX_PER_USER,
+    };
+    const page = Math.max(1, Math.floor(Number(req.query.page)) || 1);
+    const limit = Math.min(50, Math.max(1, Math.floor(Number(req.query.limit)) || 10));
+    const filters = includeVersions ? ['TRUE'] : ['p.version_root_id IS NULL'];
+    const params = [];
+    if (scope === 'community') {
+      filters.push('p.is_official = false');
+    } else if (scope === 'official') {
+      filters.push('p.is_official = true');
+    } else if (scope === 'mine') {
+      params.push(req.user.username);
+      filters.push('p.created_by = $' + params.length);
+    } else if (scope && scope !== 'all') {
+      return res.status(400).json({ error: 'Unknown Pet Pack scope.' });
+    }
+    if (q) {
+      params.push('%' + q.replace(/[%_\\]/g, '\\$&') + '%');
+      filters.push('p.name ILIKE $' + params.length);
+    }
+    const where = 'WHERE ' + filters.join(' AND ');
+    const totalResult = await db.query(
+      'SELECT COUNT(*)::int AS count FROM pet_packs p ' + where + ';',
+      params,
     );
+    const total = totalResult.rows[0].count;
+    const pages = Math.max(1, Math.ceil(total / limit));
+    const safePage = Math.min(page, pages);
+    const rowsResult = await db.query(
+      `SELECT p.id, p.name, p.created_by, p.is_official, p.version_root_id, p.version_note,
+              p.thumb, p.pet_count,
+              TO_CHAR(p.date_release, 'YYYY-MM-DD') AS date_release
+         FROM pet_packs p ${where}
+        ORDER BY p.is_official DESC, p.date_release DESC, p.id DESC
+        LIMIT ${limit} OFFSET ${(safePage - 1) * limit};`,
+      params,
+    );
+    // Admin curation only needs pack identities and counts; avoid loading/decoding every
+    // legacy sprite merely to populate its selectors.
+    if (!includeVersions) await backfillPetPackThumbs(rowsResult.rows);
+    const rootIds = [...new Set(rowsResult.rows.map((row) => row.version_root_id || row.id))];
+    const versionMap = includeVersions ? {} : await petPackVersionMap(rootIds);
+    const useMap = includeVersions ? {} : await petPackUseMap(rootIds);
     res.json({
-      packs: result.rows.map((pack) => ({
-        id: pack.id,
-        name: pack.name,
-        created_by: pack.created_by,
-        pets: parsePetPackData(pack.pack_data),
-        date_release: pack.date_release,
-        is_official: pack.is_official,
-        version_root_id: pack.version_root_id,
-      })).filter((pack) => pack.name && pack.created_by && pack.date_release && pack.pets),
+      packs: rowsResult.rows.map((row) => ({
+        id: row.id,
+        name: row.name,
+        created_by: row.created_by,
+        is_official: row.is_official,
+        date_release: row.date_release,
+        version_root_id: row.version_root_id,
+        pet_count: row.pet_count || 0,
+        thumb: row.thumb,
+        version_note: row.version_note,
+        version_count: versionMap[row.version_root_id || row.id] ? versionMap[row.version_root_id || row.id].count : 1,
+        version_ids: versionMap[row.version_root_id || row.id]
+          ? [row.version_root_id || row.id].concat(versionMap[row.version_root_id || row.id].ids)
+          : [row.id],
+        use_count: useMap[row.version_root_id || row.id] || 0,
+        is_owner: row.created_by === req.user.username,
+      })),
+      page: safePage,
+      pages,
+      total,
       can_manage_official: hasAdminPrivileges(req.user),
+      publishing,
     });
   } catch (err) {
     log('Pet pack library load failed:', err.message);
@@ -1371,19 +1533,32 @@ app.post('/api/pet-packs', authenticateToken, async (req, res) => {
   }
   const packData = normalizePetPackData(req.body?.pets);
   if (!packData) return res.status(400).json({ error: 'A Pet Pack needs 1 to 12 pets with valid frame data.' });
+  if (JSON.parse(packData).length > 1 && !hasAdminPrivileges(req.user))
+    return res.status(403).json({ error: 'Users can publish one pet at a time. Only administrators can create Pet Packs.' });
+  const note = sanitizePetPackNote(req.body?.note);
 
+  const client = await db.connect();
   try {
-    const count = await db.query('SELECT COUNT(*)::int AS count FROM pet_packs WHERE created_by = $1;', [req.user.username]);
-    if (count.rows[0].count >= PET_PACK_MAX_PER_USER)
+    await client.query('BEGIN');
+    const used = await lockPetPackPublishingUsage(client, req.user.username);
+    if (used >= PET_PACK_MAX_PER_USER) {
+      await client.query('ROLLBACK');
       return res.status(400).json({ error: 'You have reached the Pet Pack publishing limit.' });
-    await db.query(
-      'INSERT INTO pet_packs (name, created_by, pack_data, date_release) VALUES ($1, $2, $3, CURRENT_DATE);',
-      [name, req.user.username, packData],
+    }
+    const info = extractPetThumb(packData);
+    const inserted = await client.query(
+      `INSERT INTO pet_packs (name, created_by, pack_data, date_release, version_note, thumb, pet_count)
+       VALUES ($1, $2, $3, CURRENT_DATE, $4, $5, $6) RETURNING id;`,
+      [name, req.user.username, packData, note, info.thumb, info.petCount],
     );
-    res.status(201).json({ success: true });
+    await client.query('COMMIT');
+    res.status(201).json({ success: true, id: inserted.rows[0].id, version_number: 1 });
   } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
     log('Pet Pack publishing failed:', err.message);
     res.status(500).json({ error: 'Could not publish the Pet Pack.' });
+  } finally {
+    client.release();
   }
 });
 
@@ -1392,15 +1567,20 @@ app.post('/api/pet-packs/merge', authenticateToken, async (req, res) => {
     return res.status(403).json({ error: 'Only administrators can combine existing packs.' });
   const name = typeof req.body?.name === 'string' ? req.body.name.trim() : '';
   const sourceIds = req.body?.source_ids;
-  if (!name || name.length > 255 || !Array.isArray(sourceIds) || sourceIds.length < 2 ||
+  if (!name || name.length > 255 || !Array.isArray(sourceIds) || sourceIds.length < 1 ||
     sourceIds.some((id) => !Number.isSafeInteger(id) || id < 1))
-    return res.status(400).json({ error: 'Choose a name and at least two valid Pet Packs.' });
+    return res.status(400).json({ error: 'Choose a name and at least one valid pet or Pet Pack.' });
   const ids = [...new Set(sourceIds)];
   if (ids.length !== sourceIds.length)
     return res.status(400).json({ error: 'Each source Pet Pack can only be selected once.' });
   const client = await db.connect();
   try {
     await client.query('BEGIN');
+    const used = await lockPetPackPublishingUsage(client, req.user.username);
+    if (used >= PET_PACK_MAX_PER_USER) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: 'You have reached the Pet Pack publishing limit.' });
+    }
     const selected = await client.query(
       'SELECT id, pack_data, is_official, version_root_id FROM pet_packs WHERE id = ANY($1::int[]) FOR UPDATE;',
       [ids],
@@ -1421,8 +1601,9 @@ app.post('/api/pet-packs/merge', authenticateToken, async (req, res) => {
       return res.status(400).json({ error: 'The new Pet Pack would exceed the 12-pet or size limit.' });
     }
     const created = await client.query(
-      'INSERT INTO pet_packs (name, created_by, pack_data, date_release) VALUES ($1, $2, $3, CURRENT_DATE) RETURNING id;',
-      [name, req.user.username, packData],
+      `INSERT INTO pet_packs (name, created_by, pack_data, date_release, thumb, pet_count)
+       VALUES ($1, $2, $3, CURRENT_DATE, $4, $5) RETURNING id;`,
+      [name, req.user.username, packData, extractPetThumb(packData).thumb, pets.length],
     );
     await client.query('COMMIT');
     res.status(201).json({ success: true, id: created.rows[0].id });
@@ -1457,7 +1638,7 @@ app.post('/api/pet-packs/:id/versions', authenticateToken, async (req, res) => {
     const base = selected.rows[0];
     const oldRootId = base.version_root_id || base.id;
     const rootResult = await client.query(
-      'SELECT id, name, created_by, is_official FROM pet_packs WHERE id = $1 FOR UPDATE;',
+      'SELECT id, name, created_by, is_official, pack_data FROM pet_packs WHERE id = $1 FOR UPDATE;',
       [oldRootId],
     );
     if (!rootResult.rowCount) throw new Error('Pet Pack version root is missing.');
@@ -1466,23 +1647,42 @@ app.post('/api/pet-packs/:id/versions', authenticateToken, async (req, res) => {
       await client.query('ROLLBACK');
       return res.status(404).json({ error: 'Pet Pack not found.' });
     }
+    const previousData = parsePetPackData(root.pack_data) || [];
+    if (!hasAdminPrivileges(req.user) && (JSON.parse(packData).length !== 1 || previousData.length !== 1)) {
+      await client.query('ROLLBACK');
+      return res.status(403).json({ error: 'Only administrators can publish or update multi-pet packs.' });
+    }
     const updatedName = name || root.name;
     if (!updatedName || updatedName.length > 255) {
       await client.query('ROLLBACK');
       return res.status(400).json({ error: 'Pet Pack name must be between 1 and 255 characters.' });
     }
+    const thumbInfo = extractPetThumb(packData);
     const inserted = await client.query(
-      `INSERT INTO pet_packs (name, created_by, pack_data, date_release, is_official)
-       VALUES ($1, $2, $3, CURRENT_DATE, $4) RETURNING id;`,
-      [updatedName, req.user.username, packData, root.is_official && hasAdminPrivileges(req.user)],
+      `INSERT INTO pet_packs (name, created_by, pack_data, date_release, is_official, version_note, thumb, pet_count)
+       VALUES ($1, $2, $3, CURRENT_DATE, $4, $5, $6, $7) RETURNING id;`,
+      [updatedName, req.user.username, packData, root.is_official,
+        sanitizePetPackNote(req.body?.note), thumbInfo.thumb, thumbInfo.petCount],
     );
     const newRootId = inserted.rows[0].id;
     await client.query(
       'UPDATE pet_packs SET version_root_id = $1 WHERE id = $2 OR version_root_id = $2;',
       [newRootId, oldRootId],
     );
+    await client.query(
+      'UPDATE pet_pack_installs SET pack_root_id = $1 WHERE pack_root_id = $2;',
+      [newRootId, oldRootId],
+    );
+    const chainCount = await client.query(
+      'SELECT COUNT(*)::int AS count FROM pet_packs WHERE id = $1 OR version_root_id = $1;',
+      [newRootId],
+    );
     await client.query('COMMIT');
-    res.status(201).json({ success: true, id: newRootId });
+    res.status(201).json({
+      success: true,
+      id: newRootId,
+      version_number: chainCount.rows[0].count,
+    });
   } catch (err) {
     await client.query('ROLLBACK').catch(() => {});
     log('Pet Pack update failed:', err.message);
@@ -1499,7 +1699,7 @@ app.delete('/api/pet-packs/:id', authenticateToken, async (req, res) => {
   const client = await db.connect();
   try {
     await client.query('BEGIN');
-    const pack = await client.query('SELECT version_root_id, created_by FROM pet_packs WHERE id = $1 FOR UPDATE;', [petId]);
+    const pack = await client.query('SELECT id, version_root_id, created_by FROM pet_packs WHERE id = $1 FOR UPDATE;', [petId]);
     if (!pack.rowCount) {
       await client.query('ROLLBACK');
       return res.status(404).json({ error: 'Pet Pack not found.' });
@@ -1508,12 +1708,25 @@ app.delete('/api/pet-packs/:id', authenticateToken, async (req, res) => {
       await client.query('ROLLBACK');
       return res.status(404).json({ error: 'Pet Pack not found.' });
     }
+    if (!hasAdminPrivileges(req.user)) {
+      const contents = await client.query('SELECT pack_data FROM pet_packs WHERE id = $1;', [petId]);
+      if ((parsePetPackData(contents.rows[0]?.pack_data) || []).length !== 1) {
+        await client.query('ROLLBACK');
+        return res.status(403).json({ error: 'Only administrators can delete Pet Packs.' });
+      }
+    }
     if (pack.rows[0].version_root_id === null) {
       const versions = await client.query('SELECT 1 FROM pet_packs WHERE version_root_id = $1 LIMIT 1;', [petId]);
       if (versions.rowCount) {
         await client.query('ROLLBACK');
         return res.status(409).json({ error: 'This Pet Pack has older versions. Remove or regroup them before deleting its latest version.' });
       }
+      await client.query('DELETE FROM pet_pack_installs WHERE pack_root_id = $1;', [petId]);
+    } else {
+      await client.query(
+        'UPDATE pet_pack_installs SET version_id = $1 WHERE version_id = $2;',
+        [pack.rows[0].version_root_id, petId],
+      );
     }
     await client.query('DELETE FROM pet_packs WHERE id = $1;', [petId]);
     await client.query('COMMIT');
@@ -1582,6 +1795,113 @@ app.patch('/api/pet-packs/:id/official', authenticateToken, async (req, res) => 
   } catch (err) {
     log('Official Pet Pack update failed:', err.message);
     res.status(500).json({ error: 'Could not update official Pet Pack status.' });
+  }
+});
+
+app.get('/api/pet-packs/:id', authenticateToken, async (req, res) => {
+  const packId = Number(req.params.id);
+  if (!Number.isSafeInteger(packId) || packId < 1)
+    return res.status(400).json({ error: 'Invalid Pet Pack ID.' });
+  const requestedVersion = Number(req.query.version_id);
+  try {
+    const base = await db.query(
+      'SELECT id, version_root_id FROM pet_packs WHERE id = $1;',
+      [packId],
+    );
+    if (!base.rowCount) return res.status(404).json({ error: 'Pet Pack not found.' });
+    const rootId = base.rows[0].version_root_id === null ? base.rows[0].id : base.rows[0].version_root_id;
+    const rootRow = (await db.query(
+      `SELECT id, name, created_by, is_official, version_note, pack_data,
+              TO_CHAR(date_release, 'YYYY-MM-DD') AS date_release
+         FROM pet_packs WHERE id = $1;`,
+      [rootId],
+    )).rows[0];
+    if (!rootRow) return res.status(404).json({ error: 'Pet Pack not found.' });
+    const versionRows = await db.query(
+      `SELECT id, version_note, pet_count, thumb,
+              (id = $1) AS is_current,
+              TO_CHAR(date_release, 'YYYY-MM-DD') AS date_release
+         FROM pet_packs
+        WHERE id = $1 OR version_root_id = $1
+        ORDER BY (id = $1) DESC, date_release DESC, id DESC;`,
+      [rootId],
+    );
+    const viewingId = Number.isSafeInteger(requestedVersion) && requestedVersion > 0 &&
+      versionRows.rows.some((version) => version.id === requestedVersion)
+      ? requestedVersion
+      : rootId;
+    const viewingRow = viewingId === rootId
+      ? rootRow
+      : (await db.query('SELECT pack_data FROM pet_packs WHERE id = $1;', [viewingId])).rows[0];
+    const useCount = await db.query(
+      'SELECT COUNT(*)::int AS count FROM pet_pack_installs WHERE pack_root_id = $1;',
+      [rootId],
+    );
+    const versionTotal = versionRows.rows.length;
+    res.json({
+      pack: {
+        id: rootRow.id,
+        name: rootRow.name,
+        created_by: rootRow.created_by,
+        is_official: rootRow.is_official,
+        date_release: rootRow.date_release,
+        version_note: rootRow.version_note,
+        pets: parsePetPackData(viewingRow.pack_data) || [],
+      },
+      viewing_version_id: viewingId,
+      is_current_version: viewingId === rootId,
+      versions: versionRows.rows.map((version, index) => ({
+        id: version.id,
+        date_release: version.date_release,
+        version_note: version.version_note,
+        pet_count: version.pet_count,
+        thumb: version.thumb,
+        is_current: version.is_current,
+        version_number: versionTotal - index,
+      })),
+      use_count: useCount.rows[0].count,
+      is_owner: rootRow.created_by === req.user.username,
+      can_manage_official: hasAdminPrivileges(req.user),
+    });
+  } catch (err) {
+    log('Pet Pack detail load failed:', err.message);
+    res.status(500).json({ error: 'Could not load the Pet Pack.' });
+  }
+});
+
+app.post('/api/pet-packs/:id/use', authenticateToken, async (req, res) => {
+  const packId = Number(req.params.id);
+  if (!Number.isSafeInteger(packId) || packId < 1)
+    return res.status(400).json({ error: 'Invalid Pet Pack ID.' });
+  try {
+    const base = await db.query('SELECT id, version_root_id FROM pet_packs WHERE id = $1;', [packId]);
+    if (!base.rowCount) return res.status(404).json({ error: 'Pet Pack not found.' });
+    const rootId = base.rows[0].version_root_id === null ? base.rows[0].id : base.rows[0].version_root_id;
+    let versionId = rootId;
+    const requested = Number(req.body?.version_id);
+    if (Number.isSafeInteger(requested) && requested > 0) {
+      const member = await db.query(
+        'SELECT 1 FROM pet_packs WHERE id = $1 AND (id = $2 OR version_root_id = $2);',
+        [requested, rootId],
+      );
+      if (member.rowCount) versionId = requested;
+    }
+    const now = Date.now();
+    await db.query(
+      `INSERT INTO pet_pack_installs (username, pack_root_id, version_id, first_at, last_at)
+       VALUES ($1, $2, $3, $4, $4)
+       ON CONFLICT (username, pack_root_id)
+       DO UPDATE SET version_id = EXCLUDED.version_id, last_at = EXCLUDED.last_at;`,
+      [req.user.username, rootId, versionId, now],
+    );
+    const count = await db.query(
+      'SELECT COUNT(*)::int AS count FROM pet_pack_installs WHERE pack_root_id = $1;',
+      [rootId],
+    );
+    res.json({ success: true, root_id: rootId, version_id: versionId, use_count: count.rows[0].count });
+  } catch (err) {
+    log('Pet Pack install tracking failed:', err.message);
+    res.status(500).json({ error: 'Could not record the Pet Pack install.' });
   }
 });
 

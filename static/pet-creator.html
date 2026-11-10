@@ -66,6 +66,24 @@
     .frame-button img { width: 40px; height: 40px; image-rendering: pixelated; background: #fff; border: 1px solid #888; }
     .tool-btn.selected, .size-btn.selected, .toggle-btn.selected { background: #000 !important; color: #fff !important; }
     #pet-preview { display: block; width: 128px; height: 128px; margin: 8px 0; border: 2px solid #000; background: #fff; image-rendering: pixelated; }
+    .shell-tabs { display: grid; grid-template-columns: repeat(auto-fit, minmax(0, 1fr)); margin: 0 0 12px; }
+    .shell-tabs button { min-width: 0; min-height: 48px; margin-right: 4px; font-weight: bold; }
+    .shell-tabs button:last-child { margin-right: 0; }
+    .shell-tabs button[aria-selected="true"] { background: #000; color: #fff; }
+    .shell-panel[hidden] { display: none; }
+    .pet-pager { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; margin-top: 10px; }
+    .pet-pager[hidden] { display: none; }
+    .pet-pager button { min-width: 72px; min-height: 48px; }
+    .pet-pager-status { text-align: center; font-size: 12px; }
+    .pet-badge { display: inline-block; border: 2px solid #000; padding: 1px 6px; margin-left: 6px; font-size: 10px; font-weight: bold; vertical-align: middle; }
+    .pet-badge.inverted { background: #000; color: #fff; }
+    #pet-detail[hidden] { display: none; }
+    .pet-detail-banner { border: 2px solid #000; padding: 8px; margin: 8px 0; font-weight: bold; }
+    .pet-version-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-gap: 8px; align-items: center; padding: 6px 0; border-top: 1px dotted #aaa; }
+    .pet-version-meta { font-size: 11px; }
+    .pet-pack-note { white-space: pre-wrap; word-break: break-word; font-size: 12px; margin: 4px 0; }
+    #pet-pack-note { box-sizing: border-box; width: 100%; min-height: 72px; margin: 6px 0; font: inherit; }
+    .pet-slots { font-size: 12px; margin: 4px 0 8px; }
     @media (max-width: 380px) {
       .creator-content { padding: 8px; }
       .pet-card { grid-template-columns: 40px minmax(0, 1fr); }
@@ -83,6 +101,12 @@
       <div class="title-text">NEKO PET CREATOR</div>
     </header>
     <section class="creator-content">
+      <nav class="shell-tabs" role="tablist" aria-label="Pet creator sections">
+        <button id="shell-tab-create" type="button" class="paper-btn" role="tab" aria-selected="true" aria-controls="shell-panel-create">CREATE</button>
+        <button id="shell-tab-library" type="button" class="paper-btn" role="tab" aria-selected="false" aria-controls="shell-panel-library">LIBRARY</button>
+        <button id="shell-tab-builder" type="button" class="paper-btn" role="tab" aria-selected="false" aria-controls="shell-panel-builder" hidden>EDIT VERSION</button>
+      </nav>
+      <section id="shell-panel-create" class="shell-panel" role="tabpanel" aria-labelledby="shell-tab-create">
       <p>Make your pet one pose at a time. Choose a motion, draw its frame, and save.</p>
       <label class="section-label" for="pet-action">Motion</label>
       <select id="pet-action"></select>
@@ -168,46 +192,59 @@
         <button id="pet-reset" type="button" class="paper-btn">RESET TO NEKO</button>
       </div>
       <p id="pet-status" role="status" aria-live="polite"></p>
+      </section>
 
-      <section class="pet-publisher" aria-labelledby="publisher-title">
-        <h2 id="publisher-title">Pet Packs!</h2>
-        <label for="pet-pack-name">Pet Pack name</label>
-        <input id="pet-pack-name" maxlength="255" autocomplete="off" placeholder="Name this Pet Pack">
-        <div class="tools">
-          <button id="pet-add-current" type="button" class="paper-btn">ADD CURRENT PET</button>
-        </div>
-        <div class="pet-pack-draft">
-          <strong>Pack contents</strong>
-          <div id="pet-pack-draft-list"></div>
-        </div>
-        <div class="tools">
-          <button id="pet-pack-publish" type="button" class="paper-btn">PUBLISH PET PACK</button>
-          <button id="pet-cancel-update" type="button" class="paper-btn" hidden>NEW PET PACK</button>
-        </div>
-        <p id="publisher-status" role="status" aria-live="polite"></p>
+      <section id="shell-panel-library" class="shell-panel" role="tabpanel" aria-labelledby="shell-tab-library" hidden>
         <div class="pet-tabs" role="tablist" aria-label="Pet library">
-          <button id="pet-tab-community" type="button" class="paper-btn" role="tab" aria-selected="true" aria-controls="pet-panel-community">COMMUNITY PACKS</button>
-          <button id="pet-tab-official" type="button" class="paper-btn" role="tab" aria-selected="false" aria-controls="pet-panel-official">OFFICIAL PACKS</button>
+          <button id="pet-tab-community" type="button" class="paper-btn" role="tab" aria-selected="true" aria-controls="pet-panel-community">COMMUNITY PETS &amp; PACKS</button>
+          <button id="pet-tab-official" type="button" class="paper-btn" role="tab" aria-selected="false" aria-controls="pet-panel-official">OFFICIAL PETS &amp; PACKS</button>
           <button id="pet-tab-local" type="button" class="paper-btn" role="tab" aria-selected="false" aria-controls="pet-panel-local">MY PETS</button>
         </div>
         <div id="pet-panel-community" class="pet-list" role="tabpanel" aria-labelledby="pet-tab-community" aria-live="polite"></div>
         <div id="pet-panel-official" class="pet-list" role="tabpanel" aria-labelledby="pet-tab-official" aria-live="polite" hidden></div>
         <div id="pet-panel-local" class="pet-list" role="tabpanel" aria-labelledby="pet-tab-local" aria-live="polite" hidden></div>
+        <div id="pet-pager" class="pet-pager" hidden></div>
+        <p id="pet-publishing-quota" class="pet-slots" aria-live="polite"></p>
+        <p id="pet-library-status" role="status" aria-live="polite"></p>
+        <div id="pet-detail" hidden></div>
         <details id="pet-admin-tools" class="pet-admin-tools" hidden>
           <summary>ADMIN PACK CURATION</summary>
-          <p>Create a curated Pet Pack from current versions of existing packs. Source packs stay published.</p>
+          <p>Create an admin-curated Pet Pack from published pets or packs. Sources stay published; only admins can make packs or mark them official.</p>
           <label for="pet-merge-name">New Pet Pack name</label>
           <input id="pet-merge-name" maxlength="255" placeholder="Curated Pet Pack">
-          <label for="pet-merge-sources">Add pets from these current packs (up to 12 pets total)</label>
+          <label for="pet-merge-sources">Add pets from these current submissions (up to 12 pets total)</label>
           <select id="pet-merge-sources" multiple size="6"></select>
           <button id="pet-merge-packs" type="button" class="paper-btn">CREATE CURATED PACK</button>
-          <label for="pet-version-root">Latest Pet Pack / root</label>
+          <label for="pet-version-root">Latest pack / root</label>
           <select id="pet-version-root"></select>
-          <label for="pet-version-older">Older pet packs to attach</label>
+          <label for="pet-version-older">Older packs to attach</label>
           <select id="pet-version-older" multiple size="6"></select>
           <button id="pet-link-versions" type="button" class="paper-btn">LINK OLDER VERSIONS</button>
           <p id="pet-admin-status" role="status" aria-live="polite"></p>
         </details>
+      </section>
+
+      <section id="shell-panel-builder" class="shell-panel" role="tabpanel" aria-labelledby="shell-tab-builder" hidden>
+        <section class="pet-publisher" aria-labelledby="publisher-title">
+          <h2 id="publisher-title">Edit version</h2>
+          <p id="version-edit-help">Edit the pet in CREATE, then publish a new version here. Older versions stay in the history.</p>
+          <label for="pet-pack-name" id="pet-version-name-label">Pet name</label>
+          <input id="pet-pack-name" maxlength="255" autocomplete="off">
+          <div class="tools" id="pet-version-add-tools">
+            <button id="pet-add-current" type="button" class="paper-btn">ADD CURRENT DRAWING</button>
+          </div>
+          <div class="pet-pack-draft">
+            <strong id="pet-version-draft-label">Pet in this version</strong>
+            <div id="pet-pack-draft-list"></div>
+          </div>
+          <label class="section-label" for="pet-pack-note" id="pet-version-note-label">What changed in this version?</label>
+          <textarea id="pet-pack-note" maxlength="500" rows="3" placeholder="Describe this update"></textarea>
+          <div class="tools">
+            <button id="pet-pack-publish" type="button" class="paper-btn">PUBLISH PET UPDATE</button>
+            <button id="pet-cancel-update" type="button" class="paper-btn">CANCEL EDIT</button>
+          </div>
+          <p id="publisher-status" role="status" aria-live="polite"></p>
+        </section>
       </section>
     </section>
   </main>
@@ -851,15 +888,72 @@
     var localPetsKey = 'unreader-neko-pet-saves';
     var localPets = [];
     var libraryPacks = [];
+    var publishingSlotsFull = false;
     var packDraft = [];
     var canManageOfficial = false;
     var editingPackId = null;
+    var originalPackPets = null;
+    var originalPackMeta = null;
+    var libraryState = {
+      active: 'community',
+      pages: { community: 1, official: 1 },
+      totals: { community: null, official: null },
+      pageCount: { community: 1, official: 1 },
+      packs: { community: [], official: [] },
+      loaded: false,
+    };
+    var detailOpen = false;
+    var currentDetailPackId = null;
+    var lastDetailResult = null;
+    var adminPacksLoaded = false;
+    var INSTALLED_KEY = 'unreader-neko-installed';
+
+    function el(tag, className, text) {
+      var node = document.createElement(tag);
+      if (className) node.className = className;
+      if (text !== undefined) node.textContent = text;
+      return node;
+    }
+
+    function btn(text, onClick, disabled) {
+      var button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'paper-btn';
+      button.textContent = text;
+      button.disabled = disabled === true;
+      button.onclick = function () { onClick(button); };
+      return button;
+    }
+
+    function selectShellTab(name) {
+      var names = ['create', 'library', 'builder'];
+      for (var i = 0; i < names.length; i++) {
+        var on = names[i] === name;
+        document.getElementById('shell-tab-' + names[i]).setAttribute('aria-selected', String(on));
+        document.getElementById('shell-panel-' + names[i]).hidden = !on;
+      }
+      if (name === 'library') ensureLibraryLoaded();
+    }
+    ['create', 'library', 'builder'].forEach(function (name) {
+      document.getElementById('shell-tab-' + name).onclick = function () { selectShellTab(name); };
+    });
 
     function selectPetTab(tabName) {
+      libraryState.active = tabName;
       for (var i = 0; i < petTabs.length; i++) {
         var selected = petTabs[i].id === 'pet-tab-' + tabName;
         petTabs[i].setAttribute('aria-selected', String(selected));
         petPanels[petTabs[i].id.replace('pet-tab-', '')].hidden = !selected;
+      }
+      closePackDetail();
+      if (tabName === 'local') {
+        renderLocalPets();
+        renderPager();
+      } else if (libraryState.packs[tabName].length) {
+        renderLibraryPanel(tabName);
+        renderPager();
+      } else {
+        loadPackPage(tabName, libraryState.pages[tabName]);
       }
     }
 
@@ -880,7 +974,50 @@
       return result;
     }
 
-    function usePet(pet) {
+    function getInstalledPack() {
+      try {
+        var parsed = JSON.parse(localStorage.getItem(INSTALLED_KEY) || 'null');
+        return parsed && typeof parsed.rootId === 'number' ? parsed : null;
+      } catch (error) {
+        return null;
+      }
+    }
+
+    function recordInstalledPack(info) {
+      try {
+        localStorage.setItem(INSTALLED_KEY, JSON.stringify(info));
+      } catch (error) {}
+    }
+
+    // True when this device installed a pet from this pack's version chain
+    // and the pack has since moved to a newer version.
+    function packHasUpdate(pack) {
+      var installed = getInstalledPack();
+      if (!installed || !Array.isArray(pack.version_ids)) return false;
+      var installedId = installed.versionId || installed.rootId;
+      return pack.version_ids.indexOf(installedId) >= 0 && installedId !== pack.id;
+    }
+
+    function installedVersionLabel(pack) {
+      var installed = getInstalledPack();
+      if (!installed || !Array.isArray(pack.version_ids)) return '';
+      var at = pack.version_ids.indexOf(installed.versionId || installed.rootId);
+      if (at < 0) return '';
+      return 'v' + (pack.version_ids.length - at) + ' of v' + pack.version_ids.length;
+    }
+
+    function firstFrameOf(petData) {
+      try {
+        var parsed = JSON.parse(petData);
+        var list = Array.isArray(parsed) ? parsed : parsed && parsed.frames ? parsed.frames : [];
+        for (var i = 0; i < list.length; i++) {
+          if (typeof list[i] === 'string' && list[i].indexOf('data:image/png;base64,') === 0) return list[i];
+        }
+      } catch (error) {}
+      return blankFrameData;
+    }
+
+    async function usePet(pet, packContext) {
       var decoded = decodePetFrames(pet.pet_data);
       if (!decoded) {
         document.getElementById('pet-status').textContent = 'This saved pet has invalid frame data.';
@@ -893,20 +1030,67 @@
       localStorage.setItem('unreader-neko-sprite', petData);
       localStorage.setItem('unreader-neko-draft', petData);
       if (window.applyNekoSprite) window.applyNekoSprite(petData);
-      document.getElementById('pet-status').textContent = 'Using ' + pet.name + '.';
+      var status = 'Using ' + pet.name + '.';
+      if (packContext && packContext.packId && token) {
+        try {
+          var result = await petApi('/api/pet-packs/' + encodeURIComponent(packContext.packId) + '/use', {
+            method: 'POST',
+            body: JSON.stringify({ version_id: packContext.versionId || null }),
+          });
+          recordInstalledPack({
+            rootId: result.root_id,
+            versionId: result.version_id,
+            packName: packContext.packName || '',
+            petName: pet.name,
+            at: Date.now(),
+          });
+          status = 'Using ' + pet.name + ' from ' + (packContext.packName || 'Pet Pack') + '.';
+        } catch (error) {
+          status = 'Using ' + pet.name + ' (install could not be recorded).';
+        }
+      }
+      document.getElementById('pet-status').textContent = status;
     }
 
     function loadPackIntoBuilder(pack, updateExisting) {
       packDraft = pack.pets.map(function (pet) { return { name: pet.name, pet_data: pet.pet_data }; });
+      originalPackPets = updateExisting ? pack.pets.map(function (pet) {
+        return { name: pet.name, pet_data: pet.pet_data };
+      }) : null;
+      originalPackMeta = updateExisting ? {
+        id: pack.id,
+        name: pack.name,
+        is_official: pack.is_official === true,
+        version_count: pack.version_count || 1,
+      } : null;
       document.getElementById('pet-pack-name').value = pack.name;
-      editingPackId = updateExisting ? pack.id : null;
+      document.getElementById('pet-pack-note').value = '';
+      editingPackId = pack.id;
+      document.getElementById('shell-tab-builder').hidden = false;
+      document.getElementById('shell-tab-builder').textContent = 'EDIT VERSION';
+      document.getElementById('publisher-title').textContent = pack.pets.length === 1 ? 'Edit pet version' : 'Edit pack version';
+      document.getElementById('version-edit-help').textContent = pack.pets.length === 1
+        ? 'The selected version is loaded in CREATE. Edit its frames there, then return here to publish an update.'
+        : 'Update this pack version. Older versions stay in the history.';
+      document.getElementById('pet-version-name-label').textContent = pack.pets.length === 1 ? 'Pet name' : 'Pack name';
+      document.getElementById('pet-version-draft-label').textContent = pack.pets.length === 1 ? 'Pet in this version' : 'Pack contents';
+      document.getElementById('pet-version-note-label').textContent = 'What changed in this version?';
+      document.getElementById('pet-version-add-tools').hidden = pack.pets.length === 1;
+      document.getElementById('pet-pack-publish').disabled = false;
+      document.getElementById('pet-pack-publish').textContent = pack.pets.length === 1 ? 'PUBLISH PET UPDATE' : 'PUBLISH PACK UPDATE';
+      document.getElementById('pet-cancel-update').hidden = false;
+      if (pack.pets.length === 1) {
+        document.getElementById('pet-name').value = pack.pets[0].name;
+        var decodedPet = decodePetFrames(pack.pets[0].pet_data);
+        if (decodedPet) {
+          applyPetData(decodedPet);
+          currentFrame = 0;
+          drawFrame(currentFrame);
+        }
+      }
       renderPackDraft();
-      document.getElementById('pet-pack-publish').textContent = updateExisting ? 'PUBLISH PACK UPDATE' : 'PUBLISH PET PACK';
-      document.getElementById('pet-cancel-update').hidden = !updateExisting;
-      publisherStatus.textContent = updateExisting
-        ? 'Editing ' + pack.name + '. Publishing creates a new pack version.'
-        : 'Loaded ' + pack.name + ' into the builder as a new Pet Pack.';
-      document.querySelector('.pet-publisher').scrollIntoView();
+      publisherStatus.textContent = 'Editing ' + pack.name + '. Publishing creates a new version and keeps history.';
+      selectShellTab('builder');
     }
 
     function editPack(pack) {
@@ -915,18 +1099,25 @@
 
     function clearPackUpdateMode() {
       editingPackId = null;
+      originalPackPets = null;
+      originalPackMeta = null;
       packDraft = [];
       renderPackDraft();
-      document.getElementById('pet-pack-publish').textContent = 'PUBLISH PET PACK';
+      document.getElementById('pet-pack-publish').disabled = true;
       document.getElementById('pet-cancel-update').hidden = true;
+      document.getElementById('pet-version-add-tools').hidden = false;
+      document.getElementById('shell-tab-builder').hidden = true;
+      document.getElementById('shell-panel-builder').hidden = true;
+      document.getElementById('publisher-title').textContent = 'Edit version';
     }
 
     async function deletePetPack(pack) {
-      if (!(await unConfirm('Delete Pet Pack "' + pack.name + '"?'))) return;
+      if (!(await unConfirm('Delete "' + pack.name + '"?'))) return;
       try {
         await petApi('/api/pet-packs/' + encodeURIComponent(pack.id), { method: 'DELETE' });
         publisherStatus.textContent = 'Deleted Pet Pack ' + pack.name + '.';
-        await loadPetLibrary();
+        if (detailOpen) closePackDetail();
+        await refreshLibraryData();
       } catch (error) {
         publisherStatus.textContent = error.message;
       }
@@ -941,7 +1132,7 @@
         publisherStatus.textContent = isOfficial
           ? 'Marked ' + pack.name + ' as official.'
           : 'Removed ' + pack.name + ' from Official Pet Packs.';
-        await loadPetLibrary();
+        await refreshLibraryData();
       } catch (error) {
         publisherStatus.textContent = error.message;
       }
@@ -978,11 +1169,11 @@
       meta.textContent = 'Saved on this device';
       var actions = document.createElement('div');
       actions.className = 'pet-card-actions';
-      var add = document.createElement('button');
-      add.type = 'button';
-      add.className = 'paper-btn';
-      add.textContent = 'ADD TO PET PACK';
-      add.onclick = function () { addPetToPack(pet); };
+      var publish = document.createElement('button');
+      publish.type = 'button';
+      publish.className = 'paper-btn';
+      publish.textContent = 'PUBLISH PET';
+      publish.onclick = function () { publishLocalPet(pet); };
       var use = document.createElement('button');
       use.type = 'button';
       use.className = 'paper-btn';
@@ -993,112 +1184,234 @@
       remove.className = 'paper-btn';
       remove.textContent = 'DELETE';
       remove.onclick = function () { deleteLocalPet(pet); };
-      actions.append(add, use, remove);
+      actions.append(publish, use, remove);
       info.append(name, meta);
       card.append(preview, info, actions);
       return card;
     }
 
-    function createPackCard(pack, olderVersions) {
-      var firstPet = pack.pets && pack.pets[0];
-      var decoded = firstPet && decodePetFrames(firstPet.pet_data);
-      if (!decoded) return null;
-      var card = document.createElement('article');
-      card.className = 'pet-card';
+    function createPackRow(pack) {
+      var row = el('article', 'pet-card');
       var preview = document.createElement('img');
-      preview.src = decoded.frames.filter(Boolean)[0] || blankFrameData;
-      preview.alt = pack.name + ' Pet Pack preview';
-      var info = document.createElement('div');
-      info.className = 'pet-card-info';
-      var name = document.createElement('div');
-      name.className = 'pet-card-name';
-      name.textContent = pack.name;
-      var meta = document.createElement('div');
-      meta.className = 'pet-card-meta';
-      meta.textContent = (pack.is_official ? 'team unreader (feat. ' + pack.created_by + ')' : 'by ' + pack.created_by) +
-        ' · ' + pack.pets.length + (pack.pets.length === 1 ? ' pet' : ' pets') +
-        ' · ' + (pack.date_release || 'date unknown');
+      preview.src = pack.thumb || blankFrameData;
+      var itemLabel = pack.pet_count === 1 ? 'Pet' : 'Pet Pack';
+      preview.alt = pack.name + ' ' + itemLabel + ' preview';
+      var info = el('div', 'pet-card-info');
+      var name = el('div', 'pet-card-name', pack.name);
+      if (packHasUpdate(pack)) {
+        name.appendChild(el('span', 'pet-badge inverted', 'UPDATED'));
+      }
+      var meta = el('div', 'pet-card-meta',
+        (pack.is_official ? 'team unreader (feat. ' + pack.created_by + ')' : 'by ' + pack.created_by) +
+        ' · ' + pack.pet_count + (pack.pet_count === 1 ? ' pet' : ' pets') +
+        ' · ' + (pack.date_release || 'date unknown') +
+        ' · v' + (pack.version_count || 1) +
+        (pack.use_count ? ' · ' + pack.use_count + ' user' + (pack.use_count === 1 ? '' : 's') : ''));
       info.append(name, meta);
+      var actions = el('div', 'pet-card-actions');
+      actions.appendChild(btn(pack.pet_count === 1 ? 'VIEW PET' : 'VIEW PACK', function () { openPackDetail(pack.id); }));
+      row.append(preview, info, actions);
+      return row;
+    }
 
-      var actions = document.createElement('div');
-      actions.className = 'pet-card-actions';
-      if (pack.created_by === username) {
-        var update = document.createElement('button');
-        update.type = 'button';
-        update.className = 'paper-btn';
-        update.textContent = 'UPDATE PACK';
-        update.onclick = function () { editPack(pack); };
-        actions.appendChild(update);
-      }
-      if (pack.created_by === username || canManageOfficial) {
-        var remove = document.createElement('button');
-        remove.type = 'button';
-        remove.className = 'paper-btn';
-        remove.textContent = 'DELETE PACK';
-        remove.disabled = olderVersions.length > 0;
-        remove.onclick = function () { deletePetPack(pack); };
-        actions.appendChild(remove);
-      }
-      if (canManageOfficial) {
-        var official = document.createElement('button');
-        official.type = 'button';
-        official.className = 'paper-btn';
-        official.textContent = pack.is_official ? 'REMOVE OFFICIAL' : 'MAKE OFFICIAL';
-        official.onclick = function () { setPackOfficial(pack, !pack.is_official); };
-        actions.appendChild(official);
-      }
-      card.append(preview, info, actions);
-
-      var contents = document.createElement('details');
-      contents.className = 'pet-versions';
-      var summary = document.createElement('summary');
-      summary.textContent = 'PETS IN THIS PACK (' + pack.pets.length + ')';
-      contents.appendChild(summary);
-      pack.pets.forEach(function (pet) {
-        var item = document.createElement('div');
-        item.className = 'pet-pack-draft-item';
-        var label = document.createElement('span');
-        label.textContent = pet.name;
-        var use = document.createElement('button');
-        use.type = 'button';
-        use.className = 'paper-btn';
-        use.textContent = 'USE PET';
-        use.onclick = function () { usePet(pet); };
-        item.append(label, use);
-        contents.appendChild(item);
+    function setLibraryChrome(visible) {
+      document.querySelector('.pet-tabs').hidden = !visible;
+      ['community', 'official', 'local'].forEach(function (key) {
+        petPanels[key].hidden = !visible || libraryState.active !== key;
       });
-      card.appendChild(contents);
+      if (!visible) document.getElementById('pet-pager').hidden = true;
+    }
 
-      if (olderVersions.length) {
-        var versions = document.createElement('details');
-        versions.className = 'pet-versions';
-        var versionSummary = document.createElement('summary');
-        versionSummary.textContent = 'OLDER VERSIONS (' + olderVersions.length + ')';
-        versions.appendChild(versionSummary);
-        olderVersions.forEach(function (version) {
-          var row = document.createElement('div');
-          row.className = 'pet-pack-draft-item';
-          var label = document.createElement('span');
-          label.textContent = version.name + ' · ' + version.pets.length + ' pets · #' + version.id;
-          var use = document.createElement('button');
-          use.type = 'button';
-          use.className = 'paper-btn';
-          use.textContent = 'LOAD VERSION';
-          use.onclick = function () { loadPackIntoBuilder(version, version.created_by === username); };
-          row.append(label, use);
-          versions.appendChild(row);
-          if (pack.created_by === username || canManageOfficial) {
-            var deleteVersion = document.createElement('button');
-            deleteVersion.type = 'button';
-            deleteVersion.className = 'paper-btn';
-            deleteVersion.textContent = 'DELETE VERSION';
-            deleteVersion.onclick = function () { deletePetPack(version); };
-            row.appendChild(deleteVersion);
-          }
-        });
-        card.appendChild(versions);
+    function closePackDetail() {
+      detailOpen = false;
+      currentDetailPackId = null;
+      lastDetailResult = null;
+      document.getElementById('pet-detail').hidden = true;
+      setLibraryChrome(true);
+      renderPager();
+    }
+
+    async function openPackDetail(packId, versionId) {
+      if (!token) return;
+      detailOpen = true;
+      currentDetailPackId = packId;
+      setLibraryChrome(false);
+      var container = document.getElementById('pet-detail');
+      container.hidden = false;
+      while (container.firstChild) container.removeChild(container.firstChild);
+      container.textContent = 'Loading pet details...';
+      try {
+        var path = '/api/pet-packs/' + encodeURIComponent(packId);
+        if (versionId) path += '?version_id=' + encodeURIComponent(versionId);
+        var result = await petApi(path);
+        if (detailOpen && currentDetailPackId === packId) renderPackDetail(result);
+      } catch (error) {
+        container.textContent = error.message;
+        container.appendChild(btn('BACK TO LIST', function () { closePackDetail(); }));
       }
-      return card;
+    }
+
+    async function restorePetVersion(packId, versionId) {
+      try {
+        var result = await petApi('/api/pet-packs/' + encodeURIComponent(packId) + '?version_id=' + encodeURIComponent(versionId));
+        if (!result.is_owner) throw new Error('Only the pet creator can restore this version.');
+        loadPackIntoBuilder({
+          id: packId,
+          name: result.pack.name,
+          is_official: result.pack.is_official,
+          version_count: result.versions.length,
+          pets: result.pack.pets,
+        }, true);
+        publisherStatus.textContent = 'Older version loaded. Publishing creates a new current version and keeps the existing history.';
+      } catch (error) {
+        document.getElementById('pet-detail').textContent = error.message;
+        document.getElementById('pet-detail').appendChild(btn('BACK TO LIST', function () { closePackDetail(); }));
+      }
+    }
+
+    function summarizePackChanges(oldPets, newPets) {
+      var oldMap = {};
+      var newMap = {};
+      (oldPets || []).forEach(function (pet) { oldMap[pet.name] = pet.pet_data; });
+      (newPets || []).forEach(function (pet) { newMap[pet.name] = pet.pet_data; });
+      var added = 0;
+      var removed = 0;
+      var changed = 0;
+      (newPets || []).forEach(function (pet) {
+        if (!(pet.name in oldMap)) added++;
+        else if (oldMap[pet.name] !== pet.pet_data) changed++;
+      });
+      (oldPets || []).forEach(function (pet) {
+        if (!(pet.name in newMap)) removed++;
+      });
+      return { added: added, removed: removed, changed: changed };
+    }
+
+    function renderPackDetail(result) {
+      lastDetailResult = result;
+      var pack = result.pack;
+      var container = document.getElementById('pet-detail');
+      while (container.firstChild) container.removeChild(container.firstChild);
+      container.hidden = false;
+
+      var versionIds = result.versions.map(function (version) { return version.id; });
+      var currentVersion = null;
+      var viewingVersion = null;
+      result.versions.forEach(function (version) {
+        if (version.is_current) currentVersion = version;
+        if (version.id === result.viewing_version_id) viewingVersion = version;
+      });
+
+      container.appendChild(btn('< BACK TO LIST', function () { closePackDetail(); }));
+
+      var card = el('article', 'pet-card');
+      var preview = document.createElement('img');
+      preview.src = (pack.pets && pack.pets.length ? firstFrameOf(pack.pets[0].pet_data) : blankFrameData);
+      var isSinglePet = pack.pets && pack.pets.length === 1;
+      var itemLabel = isSinglePet ? 'Pet' : 'Pet Pack';
+      preview.alt = pack.name + ' ' + itemLabel + ' preview';
+      var info = el('div', 'pet-card-info');
+      var name = el('div', 'pet-card-name', pack.name);
+      if (pack.is_official) name.appendChild(el('span', 'pet-badge', 'OFFICIAL'));
+      if (packHasUpdate({ id: pack.id, version_ids: versionIds })) {
+        name.appendChild(el('span', 'pet-badge inverted', 'UPDATED'));
+      }
+      var meta = el('div', 'pet-card-meta',
+        'by ' + pack.created_by + ' · ' + (pack.date_release || 'date unknown') +
+        ' · ' + result.use_count + ' user' + (result.use_count === 1 ? '' : 's'));
+      info.append(name, meta);
+      card.append(preview, info);
+      container.appendChild(card);
+
+      if (!result.is_current_version && currentVersion) {
+        var banner = el('p', 'pet-detail-banner',
+          'Viewing older version v' + (viewingVersion ? viewingVersion.version_number : '?') + '. Current version: v' + currentVersion.version_number + '.');
+        banner.appendChild(btn('BACK TO CURRENT ' + (isSinglePet ? 'PET' : 'PACK') + ' VERSION', function () { openPackDetail(pack.id); }));
+        container.appendChild(banner);
+      } else if (packHasUpdate({ id: pack.id, version_ids: versionIds })) {
+        container.appendChild(el('p', 'pet-detail-banner',
+          'You installed ' + installedVersionLabel({ id: pack.id, version_ids: versionIds }) +
+          '. A newer version is available — re-install a pet below to update.'));
+      }
+      if (pack.version_note) {
+        container.appendChild(el('p', 'pet-pack-note', 'Latest change: ' + pack.version_note));
+      }
+
+      var ownerActions = el('div', 'tools');
+      if (result.is_owner && result.is_current_version) {
+        ownerActions.appendChild(btn(pack.pets.length === 1 ? 'UPDATE PET' : 'UPDATE PACK', function () {
+          loadPackIntoBuilder({
+            id: pack.id,
+            name: pack.name,
+            is_official: pack.is_official,
+            version_count: result.versions.length,
+            pets: pack.pets,
+          }, true);
+        }));
+      }
+      if (result.is_owner || result.can_manage_official) {
+        ownerActions.appendChild(btn(isSinglePet ? 'DELETE PET' : 'DELETE PACK', function () { deletePetPack({ id: pack.id, name: pack.name }); }));
+      }
+      if (result.can_manage_official) {
+        ownerActions.appendChild(btn(pack.is_official ? 'REMOVE OFFICIAL' : (isSinglePet ? 'MAKE PET OFFICIAL' : 'MAKE PACK OFFICIAL'), function () {
+          setPackOfficial({ id: pack.id, name: pack.name }, !pack.is_official);
+        }));
+      }
+      if (ownerActions.childNodes.length) container.appendChild(ownerActions);
+
+      var versionHeading = el('h3', null, 'VERSION HISTORY (' + result.versions.length + ')');
+      container.appendChild(versionHeading);
+      result.versions.forEach(function (version) {
+        var row = el('div', 'pet-version-row');
+        var label = el('div');
+        var title = el('strong', null,
+          'v' + version.version_number + (version.is_current ? ' — current' : '') +
+          ' · ' + (version.date_release || 'date unknown') +
+          ' · ' + (version.pet_count === null || version.pet_count === undefined
+            ? '?' : version.pet_count) + ((version.pet_count === 1) ? ' pet' : ' pets'));
+        label.appendChild(title);
+        if (version.version_note) label.appendChild(el('div', 'pet-pack-note', version.version_note));
+        row.appendChild(label);
+        var actions = el('div', 'pet-card-actions');
+        if (!version.is_current) {
+          actions.appendChild(btn('VIEW', function () { openPackDetail(pack.id, version.id); }));
+          if (result.is_owner) {
+            actions.appendChild(btn(version.pet_count === 1 ? 'RESTORE PET VERSION' : 'RESTORE AS NEW VERSION', function () {
+              restorePetVersion(pack.id, version.id);
+            }));
+            actions.appendChild(btn(version.pet_count === 1 ? 'DELETE PET VERSION' : 'DELETE VERSION', function () { deletePetPack({ id: version.id, name: version.version_note ? pack.name + ' (' + version.version_note + ')' : pack.name }); }));
+          }
+        }
+        row.appendChild(actions);
+        container.appendChild(row);
+      });
+      if (!result.is_owner) {
+        container.appendChild(el('p', 'pet-card-meta',
+          'Older versions stay viewable so nothing a ' + (isSinglePet ? 'pet update' : 'pack update') + ' replaces is lost.'));
+      }
+
+      var petsHeading = el('h3', null, pack.pets.length === 1
+        ? 'PET IN THIS VERSION'
+        : 'PETS IN THIS ' + (result.is_current_version ? 'PACK' : 'VERSION') + ' (' + pack.pets.length + ')');
+      container.appendChild(petsHeading);
+      if (!pack.pets.length) {
+        container.appendChild(el('p', null, 'This version has no readable pets.'));
+      }
+      pack.pets.forEach(function (pet) {
+        var item = el('div', 'pet-version-row');
+        var label = el('div');
+        var petPreview = document.createElement('img');
+        petPreview.src = firstFrameOf(pet.pet_data);
+        petPreview.alt = pet.name + ' preview';
+        petPreview.style.cssText = 'width:32px;height:32px;image-rendering:pixelated;border:1px solid #000;margin-right:8px;vertical-align:middle;';
+        label.appendChild(petPreview);
+        label.appendChild(document.createTextNode(pet.name));
+        item.appendChild(label);
+        item.appendChild(btn('USE PET', function () {
+          usePet(pet, { packId: pack.id, versionId: result.viewing_version_id, packName: pack.name });
+        }));
+        container.appendChild(item);
+      });
     }
 
     function renderPackDraft() {
@@ -1117,6 +1430,7 @@
         remove.type = 'button';
         remove.className = 'paper-btn';
         remove.textContent = 'REMOVE';
+        remove.hidden = packDraft.length === 1;
         remove.onclick = function () {
           packDraft.splice(index, 1);
           renderPackDraft();
@@ -1127,13 +1441,18 @@
     }
 
     function addPetToPack(pet) {
+      if (!canManageOfficial && packDraft.length >= 1) {
+        publisherStatus.textContent = 'You can update one pet at a time; only admins can make packs.';
+        return;
+      }
       if (packDraft.length >= 12) {
         publisherStatus.textContent = 'A Pet Pack can contain up to 12 pets.';
         return;
       }
-      packDraft.push({ name: pet.name, pet_data: pet.pet_data });
+      if (packDraft.length === 1) packDraft[0] = { name: pet.name, pet_data: pet.pet_data };
+      else packDraft.push({ name: pet.name, pet_data: pet.pet_data });
       renderPackDraft();
-      publisherStatus.textContent = 'Added ' + pet.name + ' to the Pet Pack.';
+      publisherStatus.textContent = packDraft.length === 1 ? 'Replaced the pet in this version.' : 'Added ' + pet.name + ' to the pack version.';
     }
 
     function addCurrentPetToPack() {
@@ -1172,25 +1491,141 @@
       renderLocalPets();
     }
 
-    function renderPetLibrary(packs) {
-      libraryPacks = packs;
-      renderSharedPetPanel(petPanels.community, packs.filter(function (pack) { return !pack.is_official; }), 'No community Pet Packs have been published yet.');
-      renderSharedPetPanel(petPanels.official, packs.filter(function (pack) { return pack.is_official; }), 'No official Pet Packs have been published yet.');
-      renderAdminPetControls();
-    }
-
-    function renderSharedPetPanel(panel, packs, emptyMessage) {
-      while (panel.firstChild) panel.removeChild(panel.firstChild);
-      var roots = packs.filter(function (pack) { return pack.version_root_id === null || pack.version_root_id === undefined; });
-      if (!roots.length) {
-        panel.textContent = emptyMessage;
+    async function publishLocalPet(pet) {
+      if (!token) {
+        document.getElementById('pet-library-status').textContent = 'Sign in before publishing a pet.';
         return;
       }
-      roots.forEach(function (root) {
-        var olderVersions = packs.filter(function (pack) { return Number(pack.version_root_id) === Number(root.id); });
-        var card = createPackCard(root, olderVersions);
-        if (card) panel.appendChild(card);
+      try {
+        await petApi('/api/pet-packs', {
+          method: 'POST',
+          body: JSON.stringify({ name: pet.name, pets: [{ name: pet.name, pet_data: pet.pet_data }] }),
+        });
+        document.getElementById('pet-library-status').textContent = 'Published ' + pet.name + '. An admin can mark it official or add it to a pack.';
+        libraryState.loaded = false;
+        await loadPackPage('community', 1);
+      } catch (error) {
+        document.getElementById('pet-library-status').textContent = error.message;
+      }
+    }
+
+    function updateSlots(publishing) {
+      if (!publishing) return;
+      publishingSlotsFull = publishing.used >= publishing.max;
+      document.getElementById('pet-publishing-quota').textContent =
+        'Publishing slots: ' + publishing.used + ' of ' + publishing.max + ' published pets or packs used.';
+      document.getElementById('pet-pack-publish').disabled = publishingSlotsFull && editingPackId === null;
+      document.getElementById('pet-admin-tools').hidden = !canManageOfficial;
+    }
+
+    function renderLibraryPanel(scope) {
+      var panel = petPanels[scope];
+      while (panel.firstChild) panel.removeChild(panel.firstChild);
+      var packs = libraryState.packs[scope];
+      if (!packs.length) {
+        panel.textContent = scope === 'official'
+          ? 'No official Pet Packs have been published yet.'
+          : 'No community Pet Packs have been published yet.';
+        return;
+      }
+      packs.forEach(function (pack) {
+        var row = createPackRow(pack);
+        if (row) panel.appendChild(row);
       });
+    }
+
+    function renderPager() {
+      var pager = document.getElementById('pet-pager');
+      while (pager.firstChild) pager.removeChild(pager.firstChild);
+      var scope = libraryState.active;
+      if (detailOpen || scope === 'local' || libraryState.totals[scope] === null) {
+        pager.hidden = true;
+        return;
+      }
+      var pages = libraryState.pageCount[scope];
+      if (pages <= 1) {
+        pager.hidden = true;
+        return;
+      }
+      var page = libraryState.pages[scope];
+      pager.append(
+        btn('PREV', function () { loadPackPage(scope, page - 1); }, page <= 1),
+        el('span', 'pet-pager-status', 'Page ' + page + ' of ' + pages + ' — ' + libraryState.totals[scope] + ' packs'),
+        btn('NEXT', function () { loadPackPage(scope, page + 1); }, page >= pages),
+      );
+      pager.hidden = false;
+    }
+
+    async function loadPackPage(scope, page) {
+      if (!token) {
+        petPanels.community.textContent = 'Sign in to browse community Pet Packs.';
+        petPanels.official.textContent = 'Sign in to browse official Pet Packs.';
+        document.getElementById('pet-publishing-quota').textContent = 'Sign in to publish pets.';
+        document.getElementById('pet-pack-publish').disabled = true;
+        return;
+      }
+      if (scope !== 'community' && scope !== 'official') return;
+      var panel = petPanels[scope];
+      panel.textContent = 'Loading Pet Packs...';
+      try {
+        var result = await petApi('/api/pet-packs?scope=' + scope + '&page=' + page + '&limit=10');
+        canManageOfficial = result.can_manage_official === true;
+        updateSlots(result.publishing);
+        renderLocalPets();
+        libraryState.packs[scope] = result.packs || [];
+        libraryState.pages[scope] = result.page || page;
+        libraryState.pageCount[scope] = result.pages || 1;
+        libraryState.totals[scope] = result.total || 0;
+        libraryState.loaded = true;
+        if (libraryState.active === scope) {
+          renderLibraryPanel(scope);
+          renderPager();
+        }
+      } catch (error) {
+        panel.textContent = error.message;
+      }
+    }
+
+    async function ensureLibraryLoaded() {
+      if (libraryState.loaded) return;
+      var scope = libraryState.active;
+      if (libraryState.packs[scope].length) {
+        renderLibraryPanel(scope);
+        renderPager();
+        return;
+      }
+      await loadPackPage(scope, libraryState.pages[scope]);
+    }
+
+    async function refreshLibraryData() {
+      if (detailOpen && currentDetailPackId) {
+        await openPackDetail(currentDetailPackId, lastDetailResult && !lastDetailResult.is_current_version ? lastDetailResult.viewing_version_id : null);
+        await loadPackPage(libraryState.active, libraryState.pages[libraryState.active] || 1);
+        return;
+      }
+      libraryState.totals = { community: null, official: null };
+      adminPacksLoaded = false;
+      await loadPackPage(libraryState.active, libraryState.pages[libraryState.active] || 1);
+    }
+
+    async function loadAdminPackList() {
+      if (!token || !canManageOfficial) return;
+      try {
+        var page = 1;
+        var pages = 1;
+        libraryPacks = [];
+        while (page <= pages) {
+          var result = await petApi('/api/pet-packs?scope=all&include_versions=true&page=' + page + '&limit=50');
+          canManageOfficial = result.can_manage_official === true;
+          libraryPacks = libraryPacks.concat(result.packs || []);
+          pages = result.pages || 1;
+          page++;
+        }
+        adminPacksLoaded = true;
+        renderAdminPetControls();
+      } catch (error) {
+        document.getElementById('pet-admin-status').textContent = error.message;
+      }
     }
 
     function updatePackOptions(select, packs, excludeId) {
@@ -1199,7 +1634,8 @@
         if (String(pack.id) === String(excludeId)) return;
         var option = document.createElement('option');
         option.value = pack.id;
-        option.textContent = pack.name + ' · ' + pack.pets.length + ' pets · #' + pack.id;
+        option.textContent = pack.name + ' · ' +
+          (pack.pet_count !== undefined ? pack.pet_count : (pack.pets ? pack.pets.length : '?')) + ' pets · #' + pack.id;
         select.appendChild(option);
       });
     }
@@ -1207,14 +1643,12 @@
     function renderAdminPetControls() {
       var tools = document.getElementById('pet-admin-tools');
       tools.hidden = !canManageOfficial;
-      if (!canManageOfficial) return;
-      updatePackOptions(document.getElementById('pet-merge-sources'), libraryPacks.filter(function (pack) {
-        return pack.version_root_id === null || pack.version_root_id === undefined;
-      }));
-      var versionRoots = libraryPacks.filter(function (pack) {
+      if (!canManageOfficial || !adminPacksLoaded) return;
+      var roots = libraryPacks.filter(function (pack) {
         return pack.version_root_id === null || pack.version_root_id === undefined;
       });
-      updatePackOptions(document.getElementById('pet-version-root'), versionRoots);
+      updatePackOptions(document.getElementById('pet-merge-sources'), roots);
+      updatePackOptions(document.getElementById('pet-version-root'), roots);
       var rootSelect = document.getElementById('pet-version-root');
       updatePackOptions(document.getElementById('pet-version-older'), libraryPacks, rootSelect.value);
       rootSelect.onchange = function () {
@@ -1222,28 +1656,16 @@
       };
     }
 
-    async function loadPetLibrary() {
-      if (!token) {
-        publisherStatus.textContent = 'Log in to publish or browse Pet Packs. Local pets are available without signing in.';
-        document.getElementById('pet-pack-publish').disabled = true;
-        petPanels.community.textContent = 'Sign in to browse community Pet Packs.';
-        petPanels.official.textContent = 'Sign in to browse official Pet Packs.';
-        return;
-      }
-      try {
-        var result = await petApi('/api/pet-packs');
-        canManageOfficial = result.can_manage_official === true;
-        renderPetLibrary(result.packs || []);
-      } catch (error) {
-        petPanels.community.textContent = error.message;
-        petPanels.official.textContent = error.message;
-      }
-    }
-
     document.getElementById('pet-add-current').onclick = addCurrentPetToPack;
     document.getElementById('pet-cancel-update').onclick = function () {
       clearPackUpdateMode();
-      publisherStatus.textContent = 'Pack update cancelled.';
+      publisherStatus.textContent = 'Edit cancelled.';
+      if (detailOpen) {
+        selectShellTab('library');
+        openPackDetail(currentDetailPackId);
+      } else {
+        selectShellTab('library');
+      }
     };
 
     document.getElementById('pet-merge-packs').onclick = async function () {
@@ -1254,8 +1676,8 @@
         if (select.options[i].selected) sourceIds.push(Number(select.options[i].value));
       }
       var status = document.getElementById('pet-admin-status');
-      if (!name || sourceIds.length < 2) {
-        status.textContent = 'Name the curated Pet Pack and select at least two current packs.';
+      if (!name || sourceIds.length < 1) {
+        status.textContent = 'Name the curated Pet Pack and select at least one current pet or pack.';
         return;
       }
       try {
@@ -1265,7 +1687,8 @@
         });
         status.textContent = 'Created ' + name + ' from ' + sourceIds.length + ' packs. Source packs remain available.';
         document.getElementById('pet-merge-name').value = '';
-        await loadPetLibrary();
+        await refreshLibraryData();
+        await loadAdminPackList();
       } catch (error) {
         status.textContent = error.message;
       }
@@ -1291,42 +1714,77 @@
         status.textContent = olderIds.length
           ? 'Older versions linked to the selected latest pack.'
           : 'Older versions unlinked from the selected latest pack.';
-        await loadPetLibrary();
+        await refreshLibraryData();
+        await loadAdminPackList();
       } catch (error) {
         status.textContent = error.message;
       }
     };
 
+    document.getElementById('pet-admin-tools').ontoggle = function () {
+      if (this.open && canManageOfficial && !adminPacksLoaded) loadAdminPackList();
+    };
+
     document.getElementById('pet-pack-publish').onclick = async function () {
       var name = document.getElementById('pet-pack-name').value.trim();
+      if (editingPackId === null) {
+        publisherStatus.textContent = 'Open one of your published pets or packs to edit its version.';
+        return;
+      }
       if (!name) {
-        publisherStatus.textContent = 'Enter a Pet Pack name first.';
+        publisherStatus.textContent = 'Enter a name first.';
         return;
       }
       if (!packDraft.length) {
-        publisherStatus.textContent = 'Add at least one local pet to the Pet Pack.';
+        publisherStatus.textContent = 'This version needs at least one pet.';
         return;
       }
-      var button = document.getElementById('pet-pack-publish');
+      var button = this;
       button.disabled = true;
       var isUpdate = editingPackId !== null;
-      publisherStatus.textContent = isUpdate ? 'Publishing Pet Pack update...' : 'Publishing Pet Pack...';
+      var note = document.getElementById('pet-pack-note').value.trim();
+      if (packDraft.length === 1) {
+        storeCurrentFrame();
+        packDraft[0] = {
+          name: document.getElementById('pet-name').value.trim() || packDraft[0].name,
+          pet_data: serializedPetFrames(),
+        };
+      }
+      if (isUpdate) {
+        var diff = summarizePackChanges(originalPackPets, packDraft);
+        var changeCount = diff.added + diff.removed + diff.changed;
+        var summary = changeCount === 0
+          ? 'No changes detected compared to the current version.'
+          : diff.changed + ' pet(s) updated, ' + diff.added + ' added, ' + diff.removed + ' removed.';
+        var confirmed = await unConfirm('Publish update for "' + name + '"? ' + summary);
+        if (!confirmed) {
+          button.disabled = false;
+          publisherStatus.textContent = 'Update cancelled.';
+          return;
+        }
+      }
+      publisherStatus.textContent = 'Publishing version update...';
       try {
-        var path = isUpdate ? '/api/pet-packs/' + encodeURIComponent(editingPackId) + '/versions' : '/api/pet-packs';
-        await petApi(path, { method: 'POST', body: JSON.stringify({ name: name, pets: packDraft }) });
+        var path = '/api/pet-packs/' + encodeURIComponent(editingPackId) + '/versions';
+        var result = await petApi(path, { method: 'POST', body: JSON.stringify({ name: name, pets: packDraft, note: note }) });
+        var versionLabel = 'v' + (result.version_number || '?');
         clearPackUpdateMode();
-        publisherStatus.textContent = isUpdate ? 'Published a new version of ' + name + '.' : 'Published Pet Pack ' + name + '.';
-        selectPetTab('community');
-        await loadPetLibrary();
+        document.getElementById('pet-pack-note').value = '';
+        publisherStatus.textContent = 'Published ' + versionLabel + ' of "' + name + '."';
+        document.getElementById('pet-library-status').textContent = publisherStatus.textContent;
+        if (detailOpen) closePackDetail();
+        selectShellTab('library');
+        selectPetTab(libraryState.active);
+        await loadPackPage(libraryState.active, 1);
       } catch (error) {
         publisherStatus.textContent = error.message;
       } finally {
-        button.disabled = false;
+        button.disabled = publishingSlotsFull && editingPackId === null;
       }
     };
 
     loadLocalPets();
-    loadPetLibrary();
+    if (token) loadPackPage('community', 1);
   </script>
 </body>
 </html>

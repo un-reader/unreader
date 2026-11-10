@@ -62,6 +62,44 @@ ALTER TABLE pet_packs ADD COLUMN IF NOT EXISTS version_root_id INTEGER;
 ALTER TABLE pet_packs ADD COLUMN IF NOT EXISTS legacy_pet_id INTEGER;
 CREATE UNIQUE INDEX IF NOT EXISTS pet_packs_legacy_pet_idx ON pet_packs (legacy_pet_id);
 CREATE INDEX IF NOT EXISTS pet_packs_version_root_idx ON pet_packs (version_root_id);
+CREATE INDEX IF NOT EXISTS pet_packs_creator_root_idx ON pet_packs (created_by, version_root_id);
+ALTER TABLE pet_packs ADD COLUMN IF NOT EXISTS version_note TEXT;
+ALTER TABLE pet_packs ADD COLUMN IF NOT EXISTS thumb TEXT;
+ALTER TABLE pet_packs ADD COLUMN IF NOT EXISTS pet_count INTEGER;
+CREATE TABLE IF NOT EXISTS pet_pack_installs (
+  username TEXT NOT NULL REFERENCES users(username) ON DELETE CASCADE,
+  pack_root_id INTEGER NOT NULL,
+  version_id INTEGER NOT NULL,
+  first_at BIGINT NOT NULL,
+  last_at BIGINT NOT NULL,
+  PRIMARY KEY (username, pack_root_id)
+);
+CREATE INDEX IF NOT EXISTS pet_pack_installs_root_idx ON pet_pack_installs (pack_root_id);
+DELETE FROM pet_pack_installs i
+ WHERE NOT EXISTS (SELECT 1 FROM pet_packs p WHERE p.id = i.pack_root_id);
+UPDATE pet_pack_installs i SET version_id = i.pack_root_id
+ WHERE NOT EXISTS (SELECT 1 FROM pet_packs p WHERE p.id = i.version_id)
+   AND EXISTS (SELECT 1 FROM pet_packs p WHERE p.id = i.pack_root_id);
+INSERT INTO pet_pack_installs (username, pack_root_id, version_id, first_at, last_at)
+SELECT username, root_id,
+       (array_agg(version_id ORDER BY last_at DESC))[1], MIN(first_at), MAX(last_at)
+  FROM (
+    SELECT i.username, COALESCE(p.version_root_id, p.id) AS root_id,
+           i.version_id, i.first_at, i.last_at
+      FROM pet_pack_installs i JOIN pet_packs p ON p.id = i.pack_root_id
+     WHERE EXISTS (
+       SELECT 1 FROM pet_pack_installs stale
+       JOIN pet_packs child ON child.id = stale.pack_root_id
+       WHERE child.version_root_id IS NOT NULL
+     )
+  ) installs
+ GROUP BY username, root_id
+ON CONFLICT (username, pack_root_id) DO UPDATE SET
+  first_at = LEAST(pet_pack_installs.first_at, EXCLUDED.first_at),
+  version_id = CASE WHEN EXCLUDED.last_at > pet_pack_installs.last_at THEN EXCLUDED.version_id ELSE pet_pack_installs.version_id END,
+  last_at = GREATEST(pet_pack_installs.last_at, EXCLUDED.last_at);
+DELETE FROM pet_pack_installs i USING pet_packs p
+ WHERE p.id = i.pack_root_id AND p.version_root_id IS NOT NULL;
 DO $$ BEGIN
   IF to_regclass('public.pets') IS NOT NULL THEN
     ALTER TABLE pets ADD COLUMN IF NOT EXISTS id SERIAL;
