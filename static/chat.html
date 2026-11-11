@@ -1788,20 +1788,38 @@ ${aiMemory}
             const scrShareBtn = document.querySelector('#scrshare');
             if (!navigator.userAgent.includes('kindle')) {
                 let screenShareSendingInterval, stream, video, canvas, ctx;
+                function stopScreenShare() {
+                    if (screenShareSendingInterval) clearInterval(screenShareSendingInterval);
+                    if (stream) stream.getTracks().forEach(track => track.stop());
+                    if (video) video.srcObject = null;
+                    screenShareSendingInterval = stream = video = canvas = ctx = null;
+                    document.querySelector('#scrshare-btn-icon').textContent = 'cast';
+                }
+                function requestScreenCapture() {
+                    const media = navigator.mediaDevices;
+                    if (media && media.getDisplayMedia)
+                        return media.getDisplayMedia({ video: true, audio: false });
+                    const legacy = navigator.getDisplayMedia || navigator.webkitGetDisplayMedia || navigator.mozGetDisplayMedia;
+                    if (legacy) return new Promise(function (resolve, reject) {
+                        legacy.call(navigator, { video: true, audio: false }, resolve, reject);
+                    });
+                    if (!window.isSecureContext)
+                        throw new Error('Screen sharing requires HTTPS or localhost.');
+                    throw new Error('Screen sharing is not supported by this browser.');
+                }
                 scrShareBtn.onclick = async function () {
                     try {
                         if (!screenShareSendingInterval) {
-                            stream = await navigator.mediaDevices.getDisplayMedia({
-                                video: {
-                                    displaySurface: 'monitor'
-                                },
-                                audio: {
-                                    suppressLocalAudioPlayback: false
-                                },
-                                systemAudio: 'include'
-                            });
+                            stream = await requestScreenCapture();
+                            stream.getVideoTracks()[0].addEventListener('ended', stopScreenShare, { once: true });
                             video = document.createElement('video');
+                            video.muted = true;
+                            video.playsInline = true;
                             video.srcObject = stream;
+                            await new Promise(function (resolve, reject) {
+                                video.onloadedmetadata = resolve;
+                                video.onerror = function () { reject(new Error('The captured screen could not be decoded.')); };
+                            });
                             await video.play();
 
                             canvas = document.createElement('canvas');
@@ -1820,16 +1838,13 @@ ${aiMemory}
                                 }));
                             }, 1000);
                         } else {
-                            clearInterval(screenShareSendingInterval);
-                            stream.getTracks().forEach(track => track.stop());
-                            await video.pause();
-                            screenShareSendingInterval = stream = video = canvas = ctx = null;
+                            stopScreenShare();
                         }
 
                         const icon = document.querySelector('#scrshare-btn-icon');
-                        if (icon.textContent === 'cast') icon.textContent = 'stop_circle';
-                        else icon.textContent = 'cast';
+                        if (stream) icon.textContent = 'stop_circle';
                     } catch (e) {
+                        stopScreenShare();
                         log('Error starting screen capture:', e);
                     }
                 }
