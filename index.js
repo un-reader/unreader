@@ -70,6 +70,7 @@ async function initDatabase() {
     log('Structural migration successful.');
   } catch (err) {
     log('DB MIGRATION FAILURE:', err);
+    if (process.env.NETLIFY) return false;
     process.exit(1);
   }
 }
@@ -89,7 +90,11 @@ app.post('/internal/database', (req, res, next) => {
   }
 });
 app.use(async (req, res, next) => {
-  try { await databaseReady; next(); }
+  try {
+    if (await databaseReady === false)
+      return res.status(503).json({ error: 'Database is unavailable. Please try again later.' });
+    next();
+  }
   catch { res.status(503).json({ error: 'Database is initializing. Please try again.' }); }
 });
 app.use(cors({ origin: '*' }));
