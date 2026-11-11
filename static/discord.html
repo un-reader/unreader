@@ -1,0 +1,1129 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN" "http://w3.org">
+<html lang='en'>
+
+<head>
+  <script src='neko-loader.js'></script>
+  <meta http-equiv='Content-Type' content="text/html; charset=UTF-8" />
+  <meta name='viewport' content="width=device-width, initial-scale=1.0" />
+  <meta name='description' content="An online chat for Kindles and other e-readers.">
+  <meta name='robots' content="index, follow">
+  <title>un-reader BBS - Chat</title>
+  <link
+    href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined&icon_names=cast,screen_share,stop_screen_share,stop_circle,close"
+    rel="stylesheet" />
+  <link rel='stylesheet' href='styles.css' />
+  <link rel='stylesheet' href='bbs.css' />
+  <link rel="shortcut icon" href='favicon.ico' type='image/x-icon'>
+  <script src='https://cdn.jsdelivr.net/npm/marked/lib/marked.umd.js'></script>
+  <script src='https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.1.2/purify.min.js'></script>
+  <script src='common.js'></script>
+  <style type='text/css'>
+    @font-face {
+      font-family: 'Pusab';
+      src: url('./pusab.ttf') format('truetype');
+    }
+
+    @font-face {
+      font-family: 'Determination Mono';
+      src: url('./DTM-Mono.ttf') format('truetype');
+    }
+
+    .window {
+      box-sizing: border-box;
+      width: 94vw;
+      height: 94vh;
+    }
+
+    #active-users {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    #dm-list {
+      max-height: 150px;
+      overflow-y: auto;
+      background: white;
+    }
+
+    .dm-unread-dot {
+      float: right;
+      margin-left: 4px;
+      color: #b00000;
+      font-weight: bold;
+    }
+
+    .page-btn {
+      background: #ffffff;
+      border: var(--border);
+      padding: 2px 8px;
+      font-family: monospace;
+      font-weight: bold;
+      cursor: pointer;
+      font-size: 11px;
+      box-shadow: 1px 1px 0 black;
+    }
+
+    .message-container {
+      width: 100%;
+      margin-bottom: 10px;
+      clear: both;
+      display: block;
+      position: relative;
+    }
+
+    .message {
+      border: var(--border);
+      padding: 6px 10px;
+      max-width: 75%;
+      width: auto;
+      position: relative;
+      background: white;
+      box-shadow: 2px 2px 0px black;
+    }
+
+    .message-meta {
+      font-size: 10px;
+      font-weight: bold;
+      color: #555;
+      margin-bottom: 3px;
+      text-transform: uppercase;
+    }
+
+    .message-text {
+      font-size: 13px;
+      white-space: pre-wrap;
+      line-height: 1.3;
+      color: black;
+      overflow-wrap: break-word;
+      word-wrap: break-word;
+      word-break: normal;
+    }
+
+    .reply-quote {
+      margin: 4px 0 6px;
+      padding: 4px 6px;
+      border-left: 3px solid currentColor;
+      background: rgba(127, 127, 127, 0.14);
+      font-size: 11px;
+      overflow-wrap: anywhere;
+    }
+
+    .message-reply-button {
+      display: block;
+      clear: both;
+      margin: 2px 0 4px;
+      font-size: 10px;
+    }
+
+    #input-bar-container {
+      flex-wrap: wrap;
+    }
+
+    #chat-cell,
+    #chat-scroll-wrapper {
+      min-width: 0;
+      min-height: 0;
+    }
+
+    #content {
+      min-width: 0;
+    }
+
+    #reply-context {
+      order: -1;
+      flex: 0 0 100%;
+      width: 100%;
+      min-width: 0;
+      box-sizing: border-box;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      margin-bottom: 6px;
+      padding: 5px;
+      border: 1px dashed black;
+      background: white;
+      color: black;
+      font-size: 12px;
+    }
+
+    #reply-context[hidden] {
+      display: none;
+    }
+
+    #reply-context-text {
+      flex: 1;
+      min-width: 0;
+      overflow-wrap: anywhere;
+    }
+
+    .message-text pre,
+    .message-text code {
+      max-width: 100%;
+      white-space: pre-wrap;
+      overflow-wrap: break-word;
+      word-wrap: break-word;
+      word-break: break-all;
+    }
+
+    .message-reactions {
+      padding-top: 3px;
+      max-width: 75%;
+    }
+
+    .message-reactions-toggle,
+    .message-reaction {
+      min-height: 28px;
+      margin: 2px 3px 2px 0;
+      padding: 3px 6px;
+      border: 2px solid black;
+      background: white;
+      box-shadow: 1px 1px 0 black;
+      font: bold 10px Arial, sans-serif;
+      cursor: pointer;
+    }
+
+    .message-reaction.selected {
+      background: black;
+      color: white;
+    }
+
+    .message-reaction-summary {
+      margin-left: 4px;
+    }
+
+    .message-reaction-count {
+      display: inline-block;
+      margin: 2px;
+      padding: 3px 5px;
+      border: 1px solid black;
+      background: white;
+      color: black;
+      font: bold 11px Arial, sans-serif;
+      cursor: pointer;
+    }
+
+    .message-reactions-menu {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 4px;
+      max-height: 190px;
+      overflow-y: auto;
+      margin-top: 4px;
+      padding: 4px;
+      border: 2px solid black;
+      background: #eee;
+    }
+
+    .message-reaction-search,
+    .message-reaction-no-matches {
+      grid-column: 1 / -1;
+      box-sizing: border-box;
+      width: 100%;
+      min-height: 40px;
+      padding: 5px;
+      border: 2px solid black;
+      font: 13px Arial, sans-serif;
+    }
+
+    .message-reaction-no-matches {
+      background: white;
+    }
+
+    .my-msg {
+      border-style: dashed;
+    }
+
+    .other-msg {
+      border-style: solid;
+    }
+
+    .purged-msg {
+      border-style: dotted !important;
+      background: #fafafa !important;
+      opacity: 0.6;
+      padding: 2px 6px;
+      box-shadow: none;
+    }
+
+    .purged-msg .message-meta {
+      margin: 0;
+      font-size: 9px;
+    }
+
+    .purged-msg .message-meta img,
+    .purged-msg .reply-quote {
+      display: none;
+    }
+
+    .purged-msg .message-text {
+      font-size: 10px;
+      line-height: 1.1;
+    }
+
+    .admin-msg .message-text,
+    .admin-msg .message-meta {
+      color: white !important;
+    }
+
+    .user-delete-btn {
+      position: absolute;
+      top: 3px;
+      right: 3px;
+      border: 1px dashed black;
+      background: white;
+      font-size: 9px;
+      cursor: pointer;
+      padding: 0 4px;
+      font-family: monospace;
+    }
+
+    #modal-overlay {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100vh;
+      z-index: 10000;
+    }
+
+    #modal-overlay .info-window {
+      position: absolute;
+      top: 10%;
+      left: 5%;
+      width: 90%;
+      height: 60vh;
+      background: rgba(255, 255, 255);
+      border: var(--border);
+      box-shadow: var(--shadow);
+      overflow-y: auto;
+    }
+
+    #scrshare-screen {
+      display: flex;
+      align-items: center;
+      justify-items: center;
+    }
+
+    #scrshare-screen div {
+      background-color: white;
+      border: 2 solid black;
+      width: auto;
+      height: auto;
+      max-width: 90%;
+      max-height: 90%;
+      aspect-ratio: 16 / 9;
+    }
+
+    #scrshare-screen img {
+      box-sizing: border-box;
+      width: 100%;
+      height: 100%;
+    }
+  </style>
+</head>
+
+<body>
+  <div id='modal-overlay' class='hide' onclick='closeInfoModal()'>
+    <div class='info-window' onclick='event.stopPropagation()'>
+      <div class='title-bar'>
+        <div class='title-stripes'></div>
+        <div class='title-text' id='modal-title'>GET INFO</div>
+        <button class='paper-btn'
+          style='position: absolute; right: 8px; width: 3.5ex; height: 3.5ex; box-shadow: 1px 1px 0px black;'
+          onclick='closeInfoModal()'> X
+        </button>
+      </div>
+      <div class='info-body' id='modal-content'>
+        <div id='profile-view'>
+          <div style="font-size: 24px; text-align: center; margin: 8px" id='info-avatar'>
+            👤
+          </div>
+          <div style="font-weight: bold; margin: 6px">
+            User: <span id='info-username'></span>
+          </div>
+          <div style="margin: 6px">
+            Location: <span id='info-location'></span>
+          </div>
+          <div style="
+                border: 1px solid black;
+                padding: 6px;
+                background: #fafafa;
+                min-height: 40px;
+                margin: 6px;
+                word-break: break-all;
+              " id='info-bio'></div>
+
+          <div id='info-edit-controls' class='hide' style="
+                display: flex;
+                flex-direction: column;
+                align-items: stretch;
+                border-top: 1px dashed black;
+                padding-top: 8px;
+                margin: 8px;
+              ">
+            <label>Avatar type <select id="edit-avatar-type" onchange="setProfileAvatarType(this.value)">
+                <option value="emoji">Emoji</option>
+                <option value="picture">Picture</option>
+              </select></label>
+            <div style="display: flex;">
+              <input type='text' id='edit-avatar' class='paper-input' placeholder='Emoji' style="
+                    width: min-content;
+                    min-width: 0;
+                    text-align: center;
+                  " />
+              <input type='text' id='edit-location' placeholder='Location...' class='paper-input' style="
+                    flex-grow: 1;
+                    margin-left: 6px;
+                  " />
+            </div>
+            <textarea id='edit-bio' placeholder="Bio description..." class='paper-input' style="
+                  margin-top: 6px;
+                  resize: none;
+                  height: max-content;
+                "></textarea>
+            <fieldset id="edit-picture-editor" class='profile-picture-editor'>
+              <legend>Profile picture</legend>
+              <label>Size <select id='edit-picture-size'>
+                  <option>8</option>
+                  <option selected>16</option>
+                  <option>32</option>
+                  <option>64</option>
+                </select></label>
+              <div class='profile-rgb-picker' aria-label="RGB color picker">
+                <label>R <input id='edit-picture-red' type='range' min='0' max='255' value='0'><output
+                    id='edit-picture-red-value'>0</output></label>
+                <label>G <input id='edit-picture-green' type='range' min='0' max='255' value='0'><output
+                    id='edit-picture-green-value'>0</output></label>
+                <label>B <input id='edit-picture-blue' type='range' min='0' max='255' value='0'><output
+                    id='edit-picture-blue-value'>0</output></label>
+                <span id='edit-picture-color-preview' aria-label="Selected color"></span>
+              </div>
+              <input id='edit-picture-file' type='file' accept='image/*'>
+              <button id='edit-picture-clear' type='button' class='paper-btn'>CLEAR PICTURE</button>
+              <div class='profile-picture-grid'><canvas id='edit-picture-canvas' width='16' height='16'
+                  aria-label="Draw your profile picture"></canvas></div>
+              <p>Choose a size, pick an RGB color, draw pixels, or import an image (scaled to fit).</p>
+              <a href='profile-picture.html' class='paper-btn'>OPEN PICTURE EDITOR</a>
+            </fieldset>
+            <button onclick='saveProfileChanges()' class='paper-btn' style="margin-top: 6px;">
+              SAVE PROFILE
+            </button>
+
+            <div style="
+                  border-top: 1px dotted black;
+                  padding-top: 8px;
+                  margin-top: 8px;
+                ">
+              <span style="
+                    font-size: 14px;
+                    font-weight: bold;
+                    display: block;
+                  ">SECURITY PREFERENCE:</span>
+              <div style="display: flex; align-items: stretch; margin-top: 6px;">
+                <input type='password' id='change-pass-current' placeholder="Current Password" class='paper-input'
+                  style="flex-grow: 1; margin-right: 6px; min-width: 0;" />
+                <input type='password' id='change-pass-new' placeholder="New Password" class='paper-input'
+                  style="flex-grow: 1; margin-right: 6px; min-width: 0;" />
+                <button onclick='submitPasswordChange()' class='paper-btn'>
+                  UPDATE PASSWORD
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <div id='admin-controls' class='hide' style="
+                border-top: 2px solid black;
+                padding-top: 8px;
+                margin-top: 8px;
+              ">
+            <span style="
+                  font-size: 10px;
+                  font-weight: bold;
+                  display: block;
+                  margin: 4px;
+                  color: red;
+                ">SYSTEM OPERATOR COMMANDS:</span>
+            <div style="display: flex; margin: 6px;">
+              <button id='admin-ban-btn' class='paper-btn' style="width: calc(50% - 3px); margin-right: 6px">
+                BAN
+              </button>
+              <button id='admin-pardon-btn' class='paper-btn' style="width: calc(50% - 3px);">
+                PARDON
+              </button>
+            </div>
+            <div style="margin: 6px; display: flex;">
+              <input type='number' id='admin-timeout-dur' value='60' class='paper-input'
+                style="width: min-content; margin-right: 6px; min-width: 0;" />
+              <button id='admin-timeout-btn' class='paper-btn' style="flex-grow: 1;">
+                TIMEOUT (MINS)
+              </button>
+            </div>
+            <input type='text' id='admin-action-note' class='paper-input' maxlength='500'
+              placeholder="Ban or timeout note"
+              style="width: calc(100% - 12px); margin: 0 6px 6px; box-sizing: border-box;" />
+          </div>
+
+          <button id='info-dm-btn' class='paper-btn' style="
+                width: calc(100% - 12px);
+                box-sizing: border-box;
+                font-family: monospace;
+                font-weight: bold;
+                padding: 4px;
+                cursor: pointer;
+                margin: 6px;
+              ">
+            SEND DIRECT MESSAGE
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id='auth-screen'>
+    <div class='auth-box'>
+      <h2 id='auth-title' style="margin-top: 0">LOGIN</h2>
+      <input class='paper-input' type='text' id='auth-user' placeholder='Username' autocomplete='off' />
+      <input class='paper-input' type='password' id='auth-pass' placeholder='Password' />
+      <button id='auth-submit-btn' class='paper-btn'>SUBMIT</button>
+      <div id='auth-toggle' style="
+            font-size: 12px;
+            margin-top: 12px;
+            cursor: pointer;
+            text-decoration: underline;
+            color: blue;
+            font-weight: bold;
+          ">
+        Need an account? Register
+      </div>
+    </div>
+  </div>
+
+  <div id='scrshare-screen' class='modal-overlay' style='display:none;'>
+    <div style='position:relative;'>
+      <button onclick='stopStream();' style='position:absolute; top:5px; left:5px;' class='paper-btn shadow'>
+        <span class="material-symbols-outlined">close</span>
+      </button>
+      <img src="#" alt="Screen shared by ">
+    </div>
+  </div>
+
+  <div class='window'>
+    <div class='title-bar'>
+      <div class='title-stripes'></div>
+      <button class='paper-btn' id='back-btn' onclick="window.location.href = 'index.html'">
+        ◀ HOME
+      </button>
+      <div class='title-text'>un-reader BBS - un-cord - Discord client</div>
+      <span class='paper-btn' id='user-display' onclick='openProfileModal(myUsername)'></span>
+    </div>
+
+    <div id='workspace-table'>
+      <div id='sidebar-cell'>
+        <div class='panel-header' id='active-users'>
+          <div>Active Users</div>
+          <button id='kick-all-btn' class="sidebar-btn paper-btn hide" style='margin:0;' onclick='kickAllUsers()'>KICK
+            ALL</button>
+        </div>
+        <div id='roster-list'></div>
+
+        <div class='panel-header'>System Operations</div>
+        <div id='settings-box-container' style="padding: 6px">
+          <div id='mod-toggle-container' class='hide'
+            style="display: none; flex-direction: column; align-items: stretch;">
+            <button id='modmenu-link-btn' class='paper-btn' style="margin-top: 6px; cursor: pointer;"
+              onclick="window.location.href = 'modmenu.html'">
+              MODERATION APP
+            </button>
+          </div>
+        </div>
+      </div>
+      <div id='chat-cell'>
+        <div id='chat-scroll-wrapper'></div>
+
+        <div id='input-bar-container'>
+          <textarea class='paper-input shadow' id='content' placeholder="Type message here..." autocomplete='off'
+            autofocus></textarea>
+          <button id='send' class='paper-btn shadow'>SEND</button>
+        </div>
+      </div>
+    </div>
+
+    <script type='text/javascript'>
+      var token = localStorage.getItem("token");
+      var myUsername = localStorage.getItem("username");
+      var unreadDMs = [];
+      var currentMode = "discord";
+      var currentTarget = "";
+      var socket = null;
+      var isRegisterMode = false;
+      var currentHistoryIndex = 0;
+      var modModeActive = false;
+      var replyTarget = null;
+      var messageAckWaiters = Object.create(null);
+      var messageAckSequence = 0;
+      var userRoles = {
+        role: {
+          role: '',
+          prefix: '',
+          style: '',
+          class: ''
+        },
+        is_banned: false,
+        timeout_until: 0,
+        last_ip: null
+      };
+
+      function isAdminUser(roles) {
+        return !!(roles && (roles.is_admin || (roles.role && roles.role.role === 'admin')));
+      }
+
+      function isModeratorUser(roles) {
+        return !!(roles && (roles.is_moderator || (roles.role && roles.role.role === 'moderator')));
+      }
+
+      document.getElementById("auth-toggle").onclick = function () {
+        isRegisterMode = !isRegisterMode;
+        log("Auth mode toggled. isRegisterMode:", isRegisterMode);
+        document.getElementById("auth-title").textContent = isRegisterMode ?
+          "REGISTER" :
+          "LOGIN";
+        this.textContent = isRegisterMode ?
+          "Already have an account? Login" :
+          "Need an account? Register";
+      };
+
+      document.getElementById("auth-submit-btn").onclick = async function () {
+        var username = document.getElementById("auth-user").value.trim();
+        var password = document.getElementById("auth-pass").value;
+        if (!username || !password)
+          return await unAlert("Fill in all log credentials.");
+        var url = isRegisterMode ? "/api/register" : "/api/login";
+        log("Auth submit. endpoint:", url, "user:", username);
+        var xhr = new XMLHttpRequest();
+        xhr.open("POST", BACKEND_URL + url, true);
+        xhr.setRequestHeader("Content-Type", "application/json");
+        xhr.onreadystatechange = async function () {
+          if (xhr.readyState === 4) {
+            log("Auth XHR complete. status:", xhr.status);
+            if (xhr.status === 200) {
+              try {
+                var data = JSON.parse(xhr.responseText);
+                localStorage.setItem("token", data.token);
+                localStorage.setItem("username", data.username);
+                token = data.token;
+                myUsername = data.username;
+                applySavedPreferences();
+                initApp(false);
+              } catch (e) {
+                log("Auth JSON parse error:", e);
+                await unAlert("Server returned an invalid packet signature.");
+              }
+            } else {
+              log("Auth failed. buffer:", xhr.responseText);
+              try {
+                var errData = JSON.parse(xhr.responseText);
+                await unAlert("Server error: " + (errData.error || "Access Denied"));
+              } catch (e) {
+                await unAlert("Structural connection failure.");
+              }
+            }
+          }
+        };
+        xhr.send(JSON.stringify({
+          username: username,
+          password: password
+        }));
+      };
+
+      function initApp(secondTry) {
+        log("Booting application logic layers.");
+        document.getElementById("auth-screen").style.display = "none";
+        document.getElementById("user-display").textContent = "@" + myUsername;
+
+        if (socket) {
+          try {
+            socket.close();
+          } catch (e) { }
+        }
+        log("Opening WS link:", WS_URL);
+        socket = new WebSocket(WS_URL);
+        socket.onopen = function () {
+          log("WS Link connected. Authenticating...");
+          socket.send(JSON.stringify({
+            type: "auth",
+            token: token
+          }));
+        };
+        const scrShareWindow = document.querySelector('#scrshare-screen div');
+        const scrShareDisplay = document.querySelector('#scrshare-screen img');
+        socket.onmessage = async function (event) {
+          var data = JSON.parse(event.data);
+          log("Incoming packet:", data.type);
+          if (data.type === "terminated") {
+            await unAlert(data.reason || "Session expired.");
+            localStorage.clear();
+            window.location.reload();
+            return;
+          }
+          if (data.type === "auth_success") {
+            if (isAdminUser(data.userRoles)) {
+              show('#kick-all-btn')
+            }
+            return;
+          }
+          if (data.type === "error_alert") {
+            await unAlert(data.message);
+            return;
+          }
+          if (data.type === "roster_update") {
+            renderUserRoster(data.users);
+            return;
+          }
+          if (data.type === "topics_update") {
+            if (data.user_roles) {
+              userRoles = data.user_roles;
+              log("Roles updated:", userRoles);
+              if (userRoles.role.role && (isAdminUser(userRoles) || isModeratorUser(userRoles))) {
+                document.querySelector('#mod-toggle-container').style.display = "flex";
+                localStorage.setItem("unreader-rank", "mod");
+              } else {
+                localStorage.setItem("unreader-rank", "user");
+              }
+            }
+            return;
+          }
+          if (data.type === "discord_message") {
+            appendMessage(data.message)
+          }
+
+          if (data.type === 'scrshare_frame') {
+            document.querySelector('#scrshare-screen').style = '';
+            scrShareDisplay.src = data.frame;
+            scrShareDisplay.alt = 'Screen shared by ' + data.sender;
+            scrShareWindow.style = 'aspect-ratio:' + scrShareDisplay.clientWidth + '/' + scrShareDisplay.clientHeight + ';';
+          } else if (data.type === 'scrshare_error') {
+            stopStream();
+            await unAlert(data.error);
+          }
+        };
+        let exit = false;
+        socket.onclose = function () {
+          log("WS Link disconnected");
+          if (!secondTry || secondTry === false)
+            setTimeout(initApp, 5000, true);
+          else
+            exit = true;
+        }
+        if (exit) {
+          localStorage.clear();
+          window.location.reload();
+        }
+      }
+
+      let screenShareReceivingInterval;
+
+      var onlineUsers = [];
+
+      function renderUserRoster(userList) {
+        onlineUsers = userList;
+        var container = document.getElementById("roster-list");
+        container.innerHTML = "";
+
+        var sysDiv = document.createElement("div");
+        sysDiv.className = "roster-user";
+        sysDiv.style.display = "flex";
+        sysDiv.style.justifyContent = "space-between";
+        sysDiv.style.alignItems = "center";
+        var sysSpan = document.createElement("span");
+        sysSpan.className = "roster-name";
+        sysSpan.textContent = "system (Global)";
+        sysSpan.onclick = function () {
+          openProfileModal("system");
+        };
+        sysDiv.appendChild(sysSpan);
+        container.appendChild(sysDiv);
+
+        for (var i = 0; i < userList.length; i++) {
+          var u = userList[i];
+          if (u.username === "system") continue;
+          log('Received user', u)
+          var div = document.createElement("div");
+          div.className = "roster-user";
+          div.style.display = "flex";
+          div.style.justifyContent = "space-between";
+          div.style.alignItems = "center";
+          var span = document.createElement("span");
+          span.className = "roster-name";
+          var un = document.createElement("a");
+          un.textContent = u.username;
+          var context = document.createElement("a");
+          context.style = 'padding-left:5px;';
+          context.textContent = u.screensharing ? "(LIVE)" : u.mode === "public" ? "(Global)" : u.mode === "dm" ? "(DM @" + u.target + ")" : u.mode === "topic" ? "(Topics)" : u.mode === "rekindle" ? "(reKindle)" : u.mode === "readium" ? "(Readium!)" : "(Neighborhood)";
+          span.appendChild(un);
+          span.appendChild(context);
+          (function (user) {
+            un.onclick = function () {
+              openProfileModal(user.username);
+            };
+          })(u);
+          (function (user) {
+            context.onclick = function () {
+              if (user.screensharing) watchStream(user.username);
+              // else if (user.mode === "public") document.location.href = '/chat.html'
+              // else if (user.mode === "dm") document.location.href = '/chat.html?dm=' + user.target
+              else if (user.mode === "topic") document.location.href = '/topics.html';
+              else if (user.mode === "rekindle") document.location.href = '/rekindle.html';
+              else if (user.mode === "readium") document.location.href = '/readium.html';
+              else document.location.href = '/neighborhood.html';
+            };
+          })(u);
+          div.appendChild(span);
+          log("Showing online user: " + u.username +
+            (u.mode === "public" ? " (Global)" : u.mode === "dm" ? " (DM @" + u.target + ")" : u.mode === "topic" ? " (Topics)" : u.mode === "rekindle" ? " (ReKindle)" : u.mode === "readium" ? " (Readium!)" : " (Neighborhood)") +
+            " who " + (userRoles.role.role && (isAdminUser(userRoles) || isModeratorUser(userRoles)) &&
+              u.username !== myUsername ? "can" : "cannot") + " be kicked. They are live: " + u.screensharing);
+          if (u.username !== myUsername &&
+            userRoles.role.role && (isAdminUser(userRoles) ||
+              (isModeratorUser(userRoles) &&
+                !isAdminUser(userRoles)))) {
+            const username = u.username;
+            var kick = document.createElement("button");
+            kick.className = "paper-btn";
+            kick.textContent = "KICK";
+            kick.onclick = function () {
+              kickUser(username);
+            };
+            div.appendChild(kick);
+          }
+          container.appendChild(div);
+        }
+      }
+
+      function watchStream(username) {
+        screenShareReceivingInterval = setInterval(() => {
+          socket.send(JSON.stringify({ type: 'scrshare_receive', sender: username }))
+        }, 1000);
+      }
+
+      function stopStream() {
+        clearInterval(screenShareReceivingInterval);
+        document.querySelector("#scrshare-screen").style = "display:none;";
+      }
+
+      function appendMessage(data) {
+        log("APPEND_MESSAGE payload details:", JSON.stringify(data));
+        var chatWrapper = document.getElementById("chat-scroll-wrapper");
+        var containerDiv = document.createElement("div");
+        containerDiv.className = "message-container";
+        var msgDiv = document.createElement("div");
+        msgDiv.id = "msg-id-" + Math.random() * 10000000; // Quick drop-in replacement for an ID
+        var effectiveUsername = data.username || data.sender || "UNKNOWN_NODE";
+        msgDiv.dataset.username = effectiveUsername;
+        var isMe = data.isMe ?? effectiveUsername === myUsername;
+        msgDiv.style.float = isMe ? "right" : "left";
+
+        var styleClass = "message ";
+
+        styleClass += isMe ? "my-msg" : "other-msg";
+        msgDiv.className = styleClass;
+
+        // var timeStr = formatTimeToken(data.timestamp);
+        var meta = document.createElement("div");
+        meta.className = "message-meta";
+        meta.style.cursor = "pointer";
+
+        var nameDisplay = "@" + effectiveUsername;
+        // var profilePicture = createProfilePicture(isSystemBotMessage ? null : data.image_data);
+        // meta.appendChild(profilePicture);
+        meta.appendChild(document.createTextNode(nameDisplay.trim()/*  + " • " + timeStr */));
+        // (function (username) {
+        //   meta.onclick = function () {
+        //     openProfileModal(username);
+        //   };
+        // })(effectiveUsername);
+
+        var txtBody = document.createElement("div");
+        txtBody.className = "message-text";
+        txtBody.innerHTML = censor(parseMarkup(data.content));
+        msgDiv.appendChild(meta);
+        msgDiv.appendChild(txtBody);
+
+        containerDiv.appendChild(msgDiv);
+        // if (!data.is_deleted && Number(data.id) > 0) {
+        //   var replyButton = document.createElement("button");
+        //   replyButton.type = "button";
+        //   replyButton.className = "paper-btn message-reply-button";
+        //   replyButton.textContent = "REPLY";
+        //   replyButton.style.float = isMe ? "right" : "left";
+        //   replyButton.onclick = function () { setReplyTarget(data); };
+        //   containerDiv.appendChild(replyButton);
+        // }
+        // if (!data.is_deleted) renderMessageReactions(containerDiv, data, socket);
+        chatWrapper.appendChild(containerDiv);
+        chatWrapper.scrollTop = chatWrapper.scrollHeight;
+      }
+
+      function sendModAction(type, id, reason) {
+        log("Dispatching moderator action packet:", type);
+        socket.send(
+          JSON.stringify({
+            type: type,
+            id: id,
+            channel: currentMode,
+            reason: reason,
+          }),
+        );
+      }
+
+      async function kickUser(username, reason = null) {
+        if (!socket || socket.readyState !== WebSocket.OPEN)
+          return await unAlert('Socket offline.');
+        if (reason === null) {
+          reason = isAdminUser(userRoles) ? 'Admin doesn\'t need any reasons' : await unPrompt('Reason for kick?');
+          if (userRoles.role.role && !isAdminUser(userRoles) && !reason) return;
+        }
+        var payload = {
+          type: 'mod_kick',
+          target: username,
+          reason: reason,
+        };
+        log('Sending mod_kick packet for:', username, payload);
+        socket.send(JSON.stringify(payload));
+      }
+
+      function kickAllUsers() {
+        for (const user of onlineUsers) {
+          const username = user.username;
+          if (user.userRoles.role.role && (username === myUsername || isAdminUser(user.userRoles))) continue;
+          kickUser(username);
+        }
+      }
+
+      function sendMessage() {
+        var input = document.getElementById("content");
+        var text = input.value.trim();
+        if (!text || !socket || socket.readyState !== WebSocket.OPEN) return;
+
+        log("Sending message:", text);
+        socket.send(
+          JSON.stringify({
+            type: "discord_message",
+            content: text,
+          }),
+        );
+        appendMessage({
+          content: text,
+          username: myUsername,
+          isMe: true
+        })
+        input.value = "";
+      }
+
+      // -----------------------------------------------------------------
+      const sendBtn = document.querySelector("#send")
+      const msgInput = document.querySelector("#content")
+      let enterPressed = false
+      sendBtn.onclick = sendMessage;
+      msgInput.onkeydown = function (e) {
+        if (e.key === "Enter" && !e.shiftKey) {
+          enterPressed = true
+          e.preventDefault();
+          sendBtn.classList.add('shadow-pressed')
+          sendMessage();
+        }
+      };
+      msgInput.onkeyup = function (e) {
+        if (e.key === "Enter" && !e.shiftKey && enterPressed) {
+          sendBtn.classList.remove('shadow-pressed')
+        }
+      };
+      msgInput.oninput = function () {
+        this.style.height = "auto";
+        this.style.height = this.scrollHeight + "px";
+      };
+
+      function openProfileModal(targetUser) {
+        log("Pulling profile metadata for:", targetUser);
+        var xhr = new XMLHttpRequest();
+        xhr.open("GET", BACKEND_URL + "/api/profile/" + encodeURIComponent(targetUser), true);
+        xhr.setRequestHeader("Authorization", "Bearer " + token);
+        xhr.onreadystatechange = function () {
+          if (xhr.readyState === 4 && xhr.status === 200) {
+            var p = JSON.parse(xhr.responseText);
+            showProfileInModal(p);
+          }
+        };
+        xhr.send();
+      }
+
+      function setProfileAvatarType(type) {
+        document.getElementById("edit-avatar").style.display = type === "emoji" ? "" : "none";
+        document.getElementById("edit-picture-editor").style.display = type === "picture" ? "" : "none";
+      }
+
+      function showProfileInModal(p) {
+        log("Profile modal view active.");
+        var overlay = document.getElementById("modal-overlay");
+        overlay.style.top = (window.pageYOffset || document.documentElement.scrollTop || document.body.scrollTop || 0) + "px";
+        if (!p) {
+          show('#modal-overlay')
+          return;
+        }
+
+        document.getElementById("info-username").textContent = p.username;
+        document.getElementById("info-location").textContent = p.location;
+        document.getElementById("info-bio").textContent = p.bio;
+        showProfilePicture(p.image_data, p.avatar_emoji);
+
+        var isSelf = p.username === myUsername;
+        document.getElementById("info-dm-btn").onclick = function () {
+          closeInfoModal();
+          switchChannel("dm", p.username);
+        };
+
+        if (isSelf) {
+          document.querySelector('#info-edit-controls').style.display = 'flex';
+          hide('#info-dm-btn');
+          document.getElementById("edit-avatar").value = p.avatar_emoji;
+          document.getElementById("edit-location").value = p.location;
+          document.getElementById("edit-bio").value = p.bio;
+          setupProfilePictureEditor(p.image_data);
+          document.getElementById("edit-avatar-type").value = p.image_data ? "picture" : "emoji";
+          setProfileAvatarType(document.getElementById("edit-avatar-type").value);
+          document.getElementById("change-pass-current").value = "";
+          document.getElementById("change-pass-new").value = "";
+        } else {
+          document.querySelector('#info-edit-controls').style.display = 'none';
+          show('#info-dm-btn');
+        }
+
+        if (isAdminUser(userRoles)) {
+          show('#admin-controls')
+          show('#admin-ban-btn')
+          show('#admin-pardon-btn')
+          show('#admin-timeout-btn')
+          document.getElementById("admin-ban-btn").onclick = async function () {
+            if (await unConfirm("Ban " + p.username + "?"))
+              socket.send(JSON.stringify({
+                type: "mod_ban",
+                target: p.username,
+                reason: document.getElementById("admin-action-note").value.trim(),
+              }));
+          };
+          document.getElementById("admin-pardon-btn").onclick = function () {
+            socket.send(
+              JSON.stringify({
+                type: "mod_pardon",
+                target: p.username
+              }),
+            );
+          };
+          document.getElementById("admin-timeout-btn").onclick = async function () {
+            var dur = document.getElementById("admin-timeout-dur").value;
+            var r = document.getElementById("admin-action-note").value.trim();
+            if (!r && !isAdminUser(userRoles))
+              return await unAlert("Moderators must provide a timeout note.");
+            socket.send(
+              JSON.stringify({
+                type: "mod_timeout",
+                target: p.username,
+                duration: dur,
+                reason: r || undefined,
+              }),
+            );
+          };
+        } else if (userRoles.role.role && isModeratorUser(userRoles) && !isSelf) {
+          show('#admin-controls')
+          hide('#admin-ban-btn')
+          hide('#admin-pardon-btn')
+          show('#admin-timeout-btn')
+          document.getElementById("admin-timeout-btn").onclick = async function () {
+            var dur = document.getElementById("admin-timeout-dur").value;
+            var r = document.getElementById("admin-action-note").value.trim();
+            if (!r)
+              return await unAlert("Moderators must provide a timeout note.");
+            if (r)
+              socket.send(
+                JSON.stringify({
+                  type: "mod_timeout",
+                  target: p.username,
+                  duration: dur,
+                  reason: r,
+                }),
+              );
+          };
+        } else {
+          hide('#admin-controls')
+        }
+        show('#modal-overlay')
+      }
+
+      function closeInfoModal() {
+        hide('#modal-overlay')
+      }
+
+      function saveProfileChanges() {
+        var av = document.getElementById("edit-avatar").value.trim();
+        var avatarType = document.getElementById("edit-avatar-type").value;
+        var loc = document.getElementById("edit-location").value.trim();
+        var bio = document.getElementById("edit-bio").value.trim();
+        var imageData = avatarType === "picture" ? getProfilePictureBase64() : "";
+        if (avatarType === "picture" && !imageData) return unAlert("Draw or import a picture before saving.");
+        log("Sending profile update packet.");
+        var xhr = new XMLHttpRequest();
+        xhr.open("POST", BACKEND_URL + "/api/profile", true);
+        xhr.setRequestHeader("Content-Type", "application/json");
+        xhr.setRequestHeader("Authorization", "Bearer " + token);
+        xhr.onreadystatechange = function () {
+          if (xhr.readyState === 4 && xhr.status === 200) {
+            closeInfoModal();
+            openProfileModal(myUsername);
+          }
+        };
+        xhr.send(JSON.stringify({
+          bio: bio,
+          location: loc,
+          avatar_emoji: av,
+          avatar_type: avatarType,
+          image_data: imageData
+        }));
+      }
+
+      async function submitPasswordChange() {
+        var currentPass = document.getElementById("change-pass-current").value;
+        var newPass = document.getElementById("change-pass-new").value;
+        if (!currentPass || !newPass)
+          return await unAlert("Please fill out both password fields.");
+        log("Sending security parameter update packet.");
+        var xhr = new XMLHttpRequest();
+        xhr.open("POST", BACKEND_URL + "/api/change-password", true);
+        xhr.setRequestHeader("Content-Type", "application/json");
+        xhr.setRequestHeader("Authorization", "Bearer " + token);
+        xhr.onreadystatechange = async function () {
+          if (xhr.readyState === 4) {
+            var res = JSON.parse(xhr.responseText);
+            if (xhr.status === 200 && res.success) {
+              await unAlert("Password updated!");
+              closeInfoModal();
+            } else await unAlert(res.error || "Failed to update password.");
+          }
+        };
+        xhr.send(
+          JSON.stringify({
+            currentPassword: currentPass,
+            newPassword: newPass,
+          }),
+        );
+      }
+
+      if (token && myUsername) {
+        initApp(false);
+      }
+    </script>
+
+
+</body>
+
+</html>

@@ -14,13 +14,10 @@ import ipaddr from 'ipaddr.js';
 import { ImapFlow } from 'imapflow';
 import Pop3Command from 'node-pop3';
 import PostalMime from 'postal-mime';
+import { log } from './shared.js'
+import { initDiscord } from './uncord.js';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'brutalist_secret_key_123';
-const DO_LOGGING = true;
-
-function log(...args) {
-  if (DO_LOGGING) console.log(`[SERVER]`, ...args);
-}
 
 function sanitize(str, options = {}) {
   if (typeof str !== 'string') return str;
@@ -484,7 +481,7 @@ app.post('/api/mail/messages', authenticateToken, async (req, res) => {
         greetingTimeout: 10000,
         socketTimeout: 15000
       });
-      client.on('error', () => {});
+      client.on('error', () => { });
       await client.connect();
       const lock = await client.getMailboxLock(request.mailbox);
       try {
@@ -495,13 +492,15 @@ app.post('/api/mail/messages', authenticateToken, async (req, res) => {
           const messages = end > 0 ? await client.fetchAll(`${start}:${end}`, {
             uid: true, envelope: true, size: true
           }) : [];
-          return res.json({ hasMore: start > 1, messages: messages.reverse().map((message) => ({
-            id: message.uid,
-            from: message.envelope?.from?.[0]?.name || message.envelope?.from?.[0]?.address || '',
-            subject: message.envelope?.subject || '(no subject)',
-            date: message.envelope?.date || '',
-            size: message.size || 0
-          })) });
+          return res.json({
+            hasMore: start > 1, messages: messages.reverse().map((message) => ({
+              id: message.uid,
+              from: message.envelope?.from?.[0]?.name || message.envelope?.from?.[0]?.address || '',
+              subject: message.envelope?.subject || '(no subject)',
+              date: message.envelope?.date || '',
+              size: message.size || 0
+            }))
+          });
         }
         const downloaded = await client.download(request.id, undefined, { uid: true, maxBytes: 1024 * 1024 });
         const chunks = [];
@@ -555,7 +554,7 @@ app.post('/api/mail/messages', authenticateToken, async (req, res) => {
     try {
       if (client instanceof ImapFlow && client.usable) await client.logout();
       else if (client && typeof client.QUIT === 'function') await client.QUIT();
-    } catch {}
+    } catch { }
   }
 });
 
@@ -1608,7 +1607,7 @@ app.post('/api/pet-packs/merge', authenticateToken, async (req, res) => {
     await client.query('COMMIT');
     res.status(201).json({ success: true, id: created.rows[0].id });
   } catch (err) {
-    await client.query('ROLLBACK').catch(() => {});
+    await client.query('ROLLBACK').catch(() => { });
     log('Pet Pack merge failed:', err.message);
     res.status(500).json({ error: 'Could not combine Pet Packs.' });
   } finally {
@@ -1684,7 +1683,7 @@ app.post('/api/pet-packs/:id/versions', authenticateToken, async (req, res) => {
       version_number: chainCount.rows[0].count,
     });
   } catch (err) {
-    await client.query('ROLLBACK').catch(() => {});
+    await client.query('ROLLBACK').catch(() => { });
     log('Pet Pack update failed:', err.message);
     res.status(500).json({ error: 'Could not publish the Pet Pack update.' });
   } finally {
@@ -1732,7 +1731,7 @@ app.delete('/api/pet-packs/:id', authenticateToken, async (req, res) => {
     await client.query('COMMIT');
     res.json({ success: true });
   } catch (err) {
-    await client.query('ROLLBACK').catch(() => {});
+    await client.query('ROLLBACK').catch(() => { });
     log('Pet Pack deletion failed:', err.message);
     res.status(500).json({ error: 'Could not delete the Pet Pack.' });
   } finally {
@@ -1773,7 +1772,7 @@ app.put('/api/pet-packs/:id/versions', authenticateToken, async (req, res) => {
     await client.query('COMMIT');
     res.json({ success: true });
   } catch (err) {
-    await client.query('ROLLBACK').catch(() => {});
+    await client.query('ROLLBACK').catch(() => { });
     log('Pet Pack version grouping failed:', err.message);
     res.status(500).json({ error: 'Could not organize Pet Pack versions.' });
   } finally {
@@ -4133,8 +4132,12 @@ app.delete('/api/portal2d/official', authenticateToken, async (req, res) => {
 // Only bind a port when run directly (`node index.js`, e.g. on Render). When
 // imported by the Netlify Function, the app is exported instead and the
 // WebSocket server stays detached.
-const isMainModule =
-  !!process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
+
+// const isMainModule =
+//   !!process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
+
+// lmao, correction: if im not wrong you can just do this lol
+const isMainModule = import.meta.main
 const server = isMainModule
   ? app.listen(process.env.PORT || 10000, '0.0.0.0', () =>
     log(`Node strictly bound to port: ${process.env.PORT || 10000}`),
@@ -4144,6 +4147,18 @@ const wss = new WebSocketServer({ noServer: true });
 const ircWss = new WebSocketServer({ noServer: true, maxPayload: 4096 });
 // IRC convention uses 6665–6669; 6697 is the standard TLS port, with 7000/7070 also offered by some networks.
 const ircTlsPorts = new Set([6665, 6666, 6667, 6668, 6669, 6697, 7000, 7070]);
+
+const discord = await initDiscord(discordMessageHandler)
+function discordMessageHandler(message) {
+  activeClients.forEach((v, k) => {
+    if (v.mode === 'discord') {
+      v.ws.send(JSON.stringify({
+        type: 'discord_message',
+        message: message
+      }))
+    }
+  })
+}
 
 if (server) {
   server.on('upgrade', (req, socket, head) => {
@@ -4738,6 +4753,12 @@ wss.on('connection', (ws, req) => {
             (c) => c.mode === 'neighborhood',
           );
         }
+      }
+
+      if (data.type === 'discord_message') {
+        discord.send(`**[${authUser}]**:
+${data.content}`)
+        activeClients.get(authUser).mode = 'discord'
       }
 
       if (data.type === 'mod_delete' || data.type === 'mod_restore') {

@@ -16,10 +16,10 @@ I assume you have all of these installed:
 
 First step is to set this up. Start by cloning the repo by going to your preferred location, open a terminal there, then
 ``` bash
-git clone https://github.com/tock-dev/unreader.git
+git clone https://github.com/un-reader/unreader.git
 cd unreader
 ```
-For the hosting, create an empty database with the provider of choice, or if using PostgreSQL, use this [guide](https://www.geeksforgeeks.org/postgresql/create-database-postgresql/).
+For the hosting, create an empty database with a PostgreSQL provider of choice, or if installing locally, use this [guide](https://www.geeksforgeeks.org/postgresql/create-database-postgresql/).
 Then, start adding your own environment variables.
 For starters, here's a reference from our run.sh script (creds stripped, nice try.)
 
