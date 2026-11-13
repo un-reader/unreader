@@ -16,17 +16,17 @@ dc.on(Events.MessageCreate, async msg => {
       return
     case 'interlope':
       msg.reply('TO T.D, K.G and L.K')
+      msg.reply('/portal-2d.html')
+      msg.reply('console: INTERLOPE')
+      msg.reply('Uncaught Error: Unknown command: INTERLOPE')
+      msg.reply('    get https://unreader-2lz0.onrender.com/interlope.js:9')
+      msg.reply('console: get("s.interlope.pull:27015")')
       msg.reply({
         files: [{
           attachment: 'https://static.wikitide.net/interloperwiki/3/33/Uman.jpg',
           name: 'Uman.jpg',
         }],
       })
-      msg.reply('/portal-2d.html')
-      msg.reply('console: INTERLOPE')
-      msg.reply('Uncaught Error: Unknown command: INTERLOPE')
-      msg.reply('    get https://unreader-2lz0.onrender.com/interlope.js:9')
-      msg.reply('console: get("s.interlope.pull:27015")')
       return
     default:
       callback({
