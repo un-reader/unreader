@@ -14,8 +14,6 @@
   <link rel='stylesheet' href='styles.css' />
   <link rel='stylesheet' href='bbs.css' />
   <link rel="shortcut icon" href='favicon.ico' type='image/x-icon'>
-  <script src='https://cdn.jsdelivr.net/npm/marked/lib/marked.umd.js'></script>
-  <script src='https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.1.2/purify.min.js'></script>
   <script src='common.js'></script>
   <style type='text/css'>
     @font-face {
@@ -32,6 +30,19 @@
       box-sizing: border-box;
       width: 94vw;
       height: 94vh;
+      max-width: 100%;
+      max-height: 100%;
+    }
+
+    /* Older Kindle Chromium does not understand max-content, min(), or aspect-ratio. */
+    #input-bar-container { height: auto; }
+    #scrshare, #send {
+      width: 48px;
+      min-width: 48px;
+      max-width: 48px;
+      height: 48px;
+      flex: 0 0 48px;
+      box-sizing: border-box;
     }
 
     #active-users {
@@ -308,7 +319,7 @@
 
     #scrshare-screen div {
       background-color: white;
-      border: 2 solid black;
+      border: 2px solid black;
       width: auto;
       height: auto;
       max-width: 90%;

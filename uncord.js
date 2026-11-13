@@ -14,8 +14,20 @@ dc.on(Events.MessageCreate, async msg => {
     case 'All hail The Great tockdev!':
       msg.reply(':saluting_face:')
       return
-    case 'lmao u can put some ARG in this switch statement for the bot to reply to, this is an example':
-      msg.reply('secret dev talk')
+    case 'Interlope':
+      msg.reply('TO T.D, K.G and L.K')
+      msg.reply({
+        files: [{
+          attachment: 'https://static.wikitide.net/interloperwiki/3/33/Uman.jpg',
+          name: 'Uman.jpg',
+        }],
+      })
+      msg.reply('/portal-2d.html')
+      msg.reply('console: INTERLOPE')
+      msg.reply('Uncaught Error: Unknown command: INTERLOPE')
+      msg.reply('    get https://unreader-2lz0.onrender.com/interlope.js:9')
+      msg.reply('console: get("s.interlope.pull:27015")')
+      msg.message('')
       return
     default:
       callback({
