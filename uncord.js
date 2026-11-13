@@ -10,11 +10,11 @@ let general
 dc.on(Events.MessageCreate, async msg => {
   if (msg.author.bot) return;
   if (msg.channelId !== process.env.DISCORD_CHANNEL_ID) return;
-  switch (msg.content) {
-    case 'All hail The Great tockdev!':
+  switch (msg.content.trim().toLowerCase()) {
+    case 'all hail the great tockdev!':
       msg.reply(':saluting_face:')
       return
-    case 'Interlope':
+    case 'interlope':
       msg.reply('TO T.D, K.G and L.K')
       msg.reply({
         files: [{
@@ -27,7 +27,6 @@ dc.on(Events.MessageCreate, async msg => {
       msg.reply('Uncaught Error: Unknown command: INTERLOPE')
       msg.reply('    get https://unreader-2lz0.onrender.com/interlope.js:9')
       msg.reply('console: get("s.interlope.pull:27015")')
-      msg.message('')
       return
     default:
       callback({
