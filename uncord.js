@@ -14,6 +14,12 @@ dc.on(Events.MessageCreate, async msg => {
     case 'all hail the great tockdev!':
       msg.reply(':saluting_face:')
       return
+    case 'All hail The Great kodigaming!':
+      msg.reply(':saluting_face:')
+      return
+    case 'All hail The Great lmaokasdf123!':
+      msg.reply(':saluting_face:')
+      return
     case 'interlope':
       msg.reply('TO T.D, K.G and L.K')
       msg.reply('/portal-2d.html')
