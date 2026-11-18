@@ -246,6 +246,7 @@ pnpm-lock.yaml
 # End of https://www.toptal.com/developers/gitignore/api/pnpm,npm
 
 run.sh
+backup.sh
 
 .kilo
 
