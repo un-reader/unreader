@@ -3222,7 +3222,7 @@ app.get('/neighborhood-history', authenticateToken, async (req, res) => {
     }
     result.push(row);
   }
-  res.json(result.reverse());
+  res.json(result);
 });
 
 const SUGG_MAX_TITLE = 120;
