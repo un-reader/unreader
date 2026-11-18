@@ -1004,7 +1004,7 @@
           }
           if (data.type === 'live_neighborhood_post') {
             if (currentMode === 'neighborhood' && currentHistoryIndex === 0)
-              appendNeighborhoodPost(data.message);
+              appendNeighborhoodPost(data.message, true);
             return;
           }
           if (data.type === 'refresh_feed') {
@@ -1180,7 +1180,7 @@
         document.querySelector('#scrshare-screen').style = 'display:none;';
       }
 
-      function appendNeighborhoodPost(data) {
+      function appendNeighborhoodPost(data, newestFirst) {
         log('APPEND_POST entry details:', JSON.stringify(data));
         var chatWrapper = document.getElementById('chat-scroll-wrapper');
         var box = document.createElement('div');
@@ -1303,7 +1303,9 @@
           }
         }
         injectModTray(box, data, false);
-        chatWrapper.appendChild(box);
+        if (newestFirst && chatWrapper.firstChild)
+          chatWrapper.insertBefore(box, chatWrapper.firstChild);
+        else chatWrapper.appendChild(box);
       }
 
       function toggleCommentsSection(postId) {
