@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# This script runs the node server
+
+export JWT_SECRET='<your JWT secret>'
+export CLOUDFLARE_ACCOUNT_ID='[<your Cloudflare account identifier>]'
+export CLOUDFLARE_API_TOKEN='[<your Cloudflare API token>]'
+export NEON_DB_URL='<your Neon database PostgreSQL connection string>'
+export LB_DB_URL='<your Layerbase database PostgreSQL connection string>'
+export DB_REPLICA_DIR='<the subdirectory you wanna use for the database sync cache>'
+export DB_COORDINATOR_SECRET='<your database coordinator secret>'
+export MICROSOFT_OAUTH_CLIENT_ID='[<your Microsoft OAuth client identifier>]'
+export DISCORD_TOKEN = '[<your Discord bot token>]'
+export DISCORD_CHANNEL_ID = '[<your Discord channel numeric identifier in the server your bot is in>]'
+export PORT=<the port you want your instance to run on>
+
+node index.js

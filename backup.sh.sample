@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+set +e
+
+TIMEOUT='<path to the timeout command on your system>'
+PG_DUMP='<path to the pg_dump command on your system>'
+
+printf '\033[1;37m[-]\033[0m Starting backup...\n'
+${TIMEOUT} -k 10s 10m ${PG_DUMP} "<your Neon database PostgreSQL connection string>" -Fc -f <path to your Neon database backup> && printf '\033[1;32m[v]\033[0m \033[0;32mSuccessfully backed up Neon database\033[0m\n' || printf "\033[1;31m[x]\033[0m \033[0;31mError backing up Neon database\033[0m: $?\n"
+${TIMEOUT} -k 10s 10m ${PG_DUMP} "<your Layerbase database PostgreSQL connection string>" -Fc -f <path to your Layerbase database backup> && printf '\033[1;32m[v]\033[0m \033[0;32mSuccessfully backed up Layerbase\033[0m\n' || printf "\033[1;31m[x]\033[0m \033[0;31mError backing up Layerbase\033[0m: $?\n"
+printf '\033[1;37m[-]\033[0m Finished backup!\n'

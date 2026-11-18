@@ -35,6 +35,7 @@ export PORT=80
 
 node index.js
 ```
+You can also use an [example run.sh](run.sh.sample) and fill it out with your information.
 
 To enable the server-side Cloudflare AI provider, also set `CLOUDFLARE_ACCOUNT_ID`
 and `CLOUDFLARE_API_TOKEN` in the server environment. The token must have the
@@ -127,3 +128,6 @@ Run `node --test test/database.test.js` for basic configuration checks. To inclu
 real replication and outage tests, set `TEST_NEON_DB_URL` and `TEST_LB_DB_URL` to
 PostgreSQL accounts allowed to create databases. The suite creates its own uniquely
 named test database on each provider and removes only those test databases afterward.
+
+You can use the [example backup.sh](backup.sh.sample) and fill it out with your database connection strings to easily back up both databases.
+You can even configure it to run in crontab.
