@@ -4815,18 +4815,12 @@ wss.on('connection', (ws, req) => {
         const avatarURL = publicOrigin
           ? `${publicOrigin}/api/profile/${encodeURIComponent(authUser)}/image`
           : null;
-        try {
-          await discord.send({
+        activeClients.get(authUser).mode = 'discord';
+        discord.send({
             content: data.content,
             username: authUser,
             ...(avatarURL ? { avatarURL } : {}),
-          });
-        } catch (error) {
-          log('Discord bridge send failed:', error.message);
-          ws.send(JSON.stringify({ type: 'error_alert', message: 'Discord rejected the message. Check the bot channel permissions.' }));
-          return;
-        }
-        activeClients.get(authUser).mode = 'discord'
+          }).catch(error => log('Discord bridge send failed:', error.message));
       }
 
       if (data.type === 'mod_delete' || data.type === 'mod_restore') {
