@@ -2270,6 +2270,16 @@ app.get('/api/profile/:username', authenticateToken, async (req, res) => {
   res.json(r.rows[0]);
 });
 
+app.get('/api/profile/:username/image', async (req, res) => {
+  const username = sanitizeUsername(req.params.username);
+  const result = await db.query(
+    'SELECT image_data FROM profile_images WHERE LOWER(TRIM(LEADING \'@\' FROM username)) = LOWER($1) ORDER BY (username = $1) DESC LIMIT 1;',
+    [username],
+  );
+  if (!result.rows[0]?.image_data) return res.sendStatus(404);
+  res.type('png').set('Cache-Control', 'public, max-age=300').send(Buffer.from(result.rows[0].image_data, 'base64'));
+});
+
 app.post('/api/profile', authenticateToken, async (req, res) => {
   let { bio, location, avatar_emoji, avatar_type, image_data } = req.body;
   bio = sanitize(bio);
@@ -3186,6 +3196,28 @@ app.get('/dm-history', authenticateToken, async (req, res) => {
   );
   for (const row of r.rows) row.role = (await getUserRoles(row.username)).role;
   res.json(r.rows.reverse());
+});
+
+app.get('/discord-history', authenticateToken, async (req, res) => {
+  if (!discord) return res.status(503).json({ error: 'Discord history is unavailable on this deployment.' });
+  try {
+    const page = Math.max(0, parseInt(req.query.index ?? '0', 10) || 0);
+    res.json(await discord.history(page));
+  } catch (error) {
+    log('Discord history failure:', error.message);
+    res.status(503).json({ error: 'Discord history is temporarily unavailable.' });
+  }
+});
+
+app.get('/discord-profile/:id', authenticateToken, async (req, res) => {
+  if (!discord) return res.status(503).json({ error: 'Discord profiles are unavailable on this deployment.' });
+  if (!/^\d+$/.test(req.params.id)) return res.status(400).json({ error: 'Invalid Discord user.' });
+  try {
+    res.json(await discord.profile(req.params.id));
+  } catch (error) {
+    log('Discord profile failure:', error.message);
+    res.status(404).json({ error: 'Discord profile is unavailable.' });
+  }
 });
 
 app.get('/topic-history', authenticateToken, async (req, res) => {
@@ -4153,7 +4185,7 @@ const ircWss = new WebSocketServer({ noServer: true, maxPayload: 4096 });
 // IRC convention uses 6665–6669; 6697 is the standard TLS port, with 7000/7070 also offered by some networks.
 const ircTlsPorts = new Set([6665, 6666, 6667, 6668, 6669, 6697, 7000, 7070]);
 
-const discord = await initDiscord(discordMessageHandler)
+const discord = server ? await initDiscord(discordMessageHandler) : null;
 function discordMessageHandler(message) {
   activeClients.forEach((v, k) => {
     if (v.mode === 'discord') {
@@ -4761,8 +4793,15 @@ wss.on('connection', (ws, req) => {
       }
 
       if (data.type === 'discord_message') {
-        discord.send(`**[${authUser}]**:
-${data.content}`)
+        const publicOrigin = (process.env.PUBLIC_URL || process.env.RENDER_EXTERNAL_URL || '').replace(/\/$/, '');
+        const avatarURL = publicOrigin
+          ? `${publicOrigin}/api/profile/${encodeURIComponent(authUser)}/image`
+          : null;
+        await discord.send({
+          content: data.content,
+          username: authUser,
+          ...(avatarURL ? { avatarURL } : {}),
+        });
         activeClients.get(authUser).mode = 'discord'
       }
 

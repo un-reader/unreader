@@ -304,12 +304,24 @@
       top: 10%;
       left: 5%;
       width: 90%;
-      height: 60vh;
+      height: auto;
+      max-height: 80vh;
       background: rgba(255, 255, 255);
       border: var(--border);
       box-shadow: var(--shadow);
       overflow-y: auto;
     }
+
+    #profile-view { padding: 8px; }
+    #profile-summary { background: #dbeaf0; border: 1px solid #000; padding: 12px; }
+    #info-avatar { margin: 0 auto 8px !important; min-height: 64px; }
+    #info-avatar img { border: 2px solid #000; }
+    #info-display-name { font-size: 20px; font-weight: bold; }
+    #info-handle { color: #555; font-size: 12px; }
+    #info-tags { margin-top: 8px; }
+    .profile-tag { display: inline-block; border: 1px solid #000; background: #fff; padding: 3px 6px; margin: 2px 3px 0 0; font-size: 11px; }
+    #admin-controls { display: none !important; }
+    #info-bio { margin: 10px 0 0 !important; background: #fff !important; }
 
     #scrshare-screen {
       display: flex;
@@ -348,23 +360,16 @@
       </div>
       <div class='info-body' id='modal-content'>
         <div id='profile-view'>
+          <div id='profile-summary'>
           <div style="font-size: 24px; text-align: center; margin: 8px" id='info-avatar'>
             👤
           </div>
-          <div style="font-weight: bold; margin: 6px">
-            User: <span id='info-username'></span>
+          <div id='info-display-name'></div>
+          <div id='info-handle'></div>
+          <div id='info-location'></div>
+          <div id='info-tags'></div>
+          <div id='info-bio'></div>
           </div>
-          <div style="margin: 6px">
-            Location: <span id='info-location'></span>
-          </div>
-          <div style="
-                border: 1px solid black;
-                padding: 6px;
-                background: #fafafa;
-                min-height: 40px;
-                margin: 6px;
-                word-break: break-all;
-              " id='info-bio'></div>
 
           <div id='info-edit-controls' class='hide' style="
                 display: flex;
@@ -551,6 +556,11 @@
         </div>
       </div>
       <div id='chat-cell'>
+        <div id='discord-history-bar' style='padding:6px; background:#eee; border-bottom:2px solid black; text-align:center;'>
+          <button id='discord-newer' class='page-btn' type='button' disabled>&lt; NEWER</button>
+          <span id='discord-page' style='margin:0 10px;'>PAGE: 0</span>
+          <button id='discord-older' class='page-btn' type='button'>OLDER &gt;</button>
+        </div>
         <div id='chat-scroll-wrapper'></div>
 
         <div id='input-bar-container'>
@@ -574,6 +584,8 @@
       var replyTarget = null;
       var messageAckWaiters = Object.create(null);
       var messageAckSequence = 0;
+      var discordHistoryPage = 0;
+      var discordProfilePictures = Object.create(null);
       var userRoles = {
         role: {
           role: '',
@@ -682,6 +694,8 @@
             if (isAdminUser(data.userRoles)) {
               show('#kick-all-btn')
             }
+            socket.send(JSON.stringify({ type: 'switch_context', mode: 'discord', target: '' }));
+            loadDiscordHistory(0);
             return;
           }
           if (data.type === "error_alert") {
@@ -733,6 +747,28 @@
         }
       }
 
+      function loadDiscordHistory(page) {
+        page = Math.max(0, page || 0);
+        discordHistoryPage = page;
+        document.getElementById('discord-page').textContent = 'PAGE: ' + page;
+        document.getElementById('discord-newer').disabled = page === 0;
+        var xhr = new XMLHttpRequest();
+        xhr.open('GET', BACKEND_URL + '/discord-history?index=' + encodeURIComponent(page), true);
+        xhr.setRequestHeader('Authorization', 'Bearer ' + token);
+        xhr.onreadystatechange = function () {
+          if (xhr.readyState !== 4 || xhr.status !== 200) return;
+          var wrapper = document.getElementById('chat-scroll-wrapper');
+          wrapper.innerHTML = '';
+          var messages = JSON.parse(xhr.responseText);
+          for (var i = 0; i < messages.length; i++) appendMessage(messages[i]);
+          document.getElementById('discord-older').disabled = messages.length < 10;
+        };
+        xhr.send();
+      }
+
+      document.getElementById('discord-newer').onclick = function () { loadDiscordHistory(discordHistoryPage - 1); };
+      document.getElementById('discord-older').onclick = function () { loadDiscordHistory(discordHistoryPage + 1); };
+
       let screenShareReceivingInterval;
 
       var onlineUsers = [];
@@ -771,7 +807,7 @@
           un.textContent = u.username;
           var context = document.createElement("a");
           context.style = 'padding-left:5px;';
-          context.textContent = u.screensharing ? "(LIVE)" : u.mode === "public" ? "(Global)" : u.mode === "dm" ? "(DM @" + u.target + ")" : u.mode === "topic" ? "(Topics)" : u.mode === "rekindle" ? "(reKindle)" : u.mode === "readium" ? "(Readium!)" : "(Neighborhood)";
+          context.textContent = u.screensharing ? "(LIVE)" : u.mode === "discord" ? "(Un-Cord)" : u.mode === "public" ? "(Global)" : u.mode === "dm" ? "(DM @" + u.target + ")" : u.mode === "topic" ? "(Topics)" : u.mode === "rekindle" ? "(reKindle)" : u.mode === "readium" ? "(Readium!)" : "(Neighborhood)";
           span.appendChild(un);
           span.appendChild(context);
           (function (user) {
@@ -792,7 +828,7 @@
           })(u);
           div.appendChild(span);
           log("Showing online user: " + u.username +
-            (u.mode === "public" ? " (Global)" : u.mode === "dm" ? " (DM @" + u.target + ")" : u.mode === "topic" ? " (Topics)" : u.mode === "rekindle" ? " (ReKindle)" : u.mode === "readium" ? " (Readium!)" : " (Neighborhood)") +
+            (u.mode === "discord" ? " (Un-Cord)" : u.mode === "public" ? " (Global)" : u.mode === "dm" ? " (DM @" + u.target + ")" : u.mode === "topic" ? " (Topics)" : u.mode === "rekindle" ? " (ReKindle)" : u.mode === "readium" ? " (Readium!)" : " (Neighborhood)") +
             " who " + (userRoles.role.role && (isAdminUser(userRoles) || isModeratorUser(userRoles)) &&
               u.username !== myUsername ? "can" : "cannot") + " be kicked. They are live: " + u.screensharing);
           if (u.username !== myUsername &&
@@ -846,20 +882,50 @@
         meta.style.cursor = "pointer";
 
         var nameDisplay = "@" + effectiveUsername;
-        // var profilePicture = createProfilePicture(isSystemBotMessage ? null : data.image_data);
-        // meta.appendChild(profilePicture);
+        var profilePicture = createProfilePicture(discordProfilePictures[effectiveUsername] || null);
+        meta.appendChild(profilePicture);
+        if (!Object.prototype.hasOwnProperty.call(discordProfilePictures, effectiveUsername)) {
+          discordProfilePictures[effectiveUsername] = null;
+          var profileXhr = new XMLHttpRequest();
+          profileXhr.open('GET', BACKEND_URL + '/api/profile/' + encodeURIComponent(effectiveUsername), true);
+          profileXhr.setRequestHeader('Authorization', 'Bearer ' + token);
+          profileXhr.onreadystatechange = function () {
+            if (profileXhr.readyState !== 4 || profileXhr.status !== 200) return;
+            try {
+              var profile = JSON.parse(profileXhr.responseText);
+              discordProfilePictures[effectiveUsername] = profile.image_data || null;
+              var imageUrl = profilePictureDataUrl(discordProfilePictures[effectiveUsername]);
+              if (imageUrl) profilePicture.src = imageUrl;
+            } catch (error) { log('Discord profile picture lookup failed:', error); }
+          };
+          profileXhr.send();
+        }
         meta.appendChild(document.createTextNode(nameDisplay.trim()/*  + " • " + timeStr */));
-        // (function (username) {
-        //   meta.onclick = function () {
-        //     openProfileModal(username);
-        //   };
-        // })(effectiveUsername);
+        (function (username) {
+          meta.onclick = function () {
+            if (data.discord_user_id && !data.isMe && !data.is_unreader_account) openDiscordProfileModal(data);
+            else openProfileModal(username);
+          };
+        })(effectiveUsername);
 
         var txtBody = document.createElement("div");
         txtBody.className = "message-text";
         txtBody.innerHTML = censor(parseMarkup(data.content));
         msgDiv.appendChild(meta);
         msgDiv.appendChild(txtBody);
+
+        if (data.discord_url) {
+          var discordLink = document.createElement('a');
+          discordLink.className = 'paper-btn';
+          discordLink.href = data.discord_url;
+          discordLink.target = '_blank';
+          discordLink.rel = 'noopener noreferrer';
+          discordLink.textContent = 'OPEN IN DISCORD';
+          discordLink.style.display = 'inline-block';
+          discordLink.style.marginTop = '6px';
+          discordLink.style.fontSize = '10px';
+          msgDiv.appendChild(discordLink);
+        }
 
         containerDiv.appendChild(msgDiv);
         // if (!data.is_deleted && Number(data.id) > 0) {
@@ -969,6 +1035,27 @@
         xhr.send();
       }
 
+      function openDiscordProfileModal(message) {
+        var xhr = new XMLHttpRequest();
+        xhr.open('GET', BACKEND_URL + '/discord-profile/' + encodeURIComponent(message.discord_user_id), true);
+        xhr.setRequestHeader('Authorization', 'Bearer ' + token);
+        xhr.onreadystatechange = function () {
+          if (xhr.readyState !== 4) return;
+          if (xhr.status === 200) {
+            var discordProfile = JSON.parse(xhr.responseText);
+            discordProfile.bio = 'Discord user';
+            discordProfile.location = 'Discord';
+            discordProfile.avatar_emoji = '';
+            discordProfile.is_admin = false;
+            discordProfile.is_moderator = false;
+            showProfileInModal(discordProfile);
+          } else {
+            openProfileModal(message.username);
+          }
+        };
+        xhr.send();
+      }
+
       function setProfileAvatarType(type) {
         document.getElementById("edit-avatar").style.display = type === "emoji" ? "" : "none";
         document.getElementById("edit-picture-editor").style.display = type === "picture" ? "" : "none";
@@ -983,10 +1070,30 @@
           return;
         }
 
-        document.getElementById("info-username").textContent = p.username;
+        document.getElementById("info-display-name").textContent = p.display_name || p.username;
+        document.getElementById("info-handle").textContent = '@' + p.username;
         document.getElementById("info-location").textContent = p.location;
         document.getElementById("info-bio").textContent = p.bio;
-        showProfilePicture(p.image_data, p.avatar_emoji);
+        var tags = document.getElementById('info-tags');
+        tags.innerHTML = '';
+        function addProfileTag(label) {
+          var tag = document.createElement('span');
+          tag.className = 'profile-tag';
+          tag.textContent = label;
+          tags.appendChild(tag);
+        }
+        if (p.is_admin) addProfileTag('administrator');
+        if (p.is_moderator) addProfileTag('moderator');
+        if (p.avatar_url) {
+          var discordAvatar = document.getElementById('info-avatar');
+          discordAvatar.innerHTML = '';
+          var avatarImage = document.createElement('img');
+          avatarImage.src = p.avatar_url;
+          avatarImage.alt = 'Profile picture';
+          avatarImage.width = avatarImage.height = 64;
+          avatarImage.style.width = avatarImage.style.height = '64px';
+          discordAvatar.appendChild(avatarImage);
+        } else showProfilePicture(p.image_data, p.avatar_emoji);
 
         var isSelf = p.username === myUsername;
         document.getElementById("info-dm-btn").onclick = function () {

@@ -3,9 +3,31 @@ import { log } from './shared.js';
 
 let callback = msg => log('Discord bot received a message:', msg)
 let send2General
+let accountWebhook
 
 const dc = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent] })
 let general
+
+function formatDiscordMessage(message) {
+  const attachments = [...message.attachments.values()].map(file => file.url);
+  const raw = [message.cleanContent || message.content || '', ...attachments].filter(Boolean).join('\n');
+  const match = raw.match(/^\[([^\]]+)\]:\s*([\s\S]*)$/);
+  return {
+    id: message.id,
+    username: match ? match[1] : message.author.displayName,
+    sender: message.author.displayName,
+    discord_user_id: message.author.id,
+    discord_display_name: message.author.displayName,
+    discord_username: message.author.username,
+    is_unreader_account: !!match,
+    content: match ? match[2] : raw,
+    timestamp: message.createdTimestamp,
+    discord_url: message.url,
+    isMe: false,
+    role: {},
+    reactions: [],
+  };
+}
 
 dc.on(Events.MessageCreate, async msg => {
   if (msg.author.bot) return;
@@ -35,10 +57,7 @@ dc.on(Events.MessageCreate, async msg => {
       })
       return
     default:
-      callback({
-        content: msg.content,
-        username: msg.author.displayName
-      })
+      callback(formatDiscordMessage(msg))
   }
 })
 
@@ -46,12 +65,34 @@ export async function initDiscord(inboundCallback) {
   await dc.login(process.env.DISCORD_TOKEN)
   callback = inboundCallback
   return {
+    history: async function (page = 0) {
+      if (!general) throw new Error('Discord channel is not ready.');
+      const messages = [...(await general.messages.fetch({ limit: 100 })).values()];
+      const start = Math.max(0, Number(page) || 0) * 10;
+      return messages.slice(start, start + 10).reverse().map(formatDiscordMessage);
+    },
+    profile: async function (userId) {
+      const user = await dc.users.fetch(userId);
+      return {
+        username: user.username,
+        display_name: user.globalName || user.displayName || user.username,
+        avatar_url: user.displayAvatarURL({ extension: 'png', size: 128 }),
+      };
+    },
     send:
       await new Promise(res => {
         dc.on(Events.ClientReady, async client => {
           general = await client.channels.fetch(process.env.DISCORD_CHANNEL_ID)
-          send2General = text => {
-            general.send(text)
+          try {
+            const hooks = await general.fetchWebhooks()
+            accountWebhook = hooks.find(hook => hook.name === 'UnReader account bridge')
+            if (!accountWebhook) accountWebhook = await general.createWebhook({ name: 'UnReader account bridge' })
+          } catch (error) {
+            log('Discord webhook unavailable; using the bot identity:', error.message)
+          }
+          send2General = payload => {
+            if (accountWebhook && typeof payload === 'object') return accountWebhook.send(payload)
+            return general.send(typeof payload === 'string' ? payload : payload.content)
           }
           res(send2General)
         })
