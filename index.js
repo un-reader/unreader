@@ -4822,8 +4822,7 @@ wss.on('connection', (ws, req) => {
           return;
         }
         const publicOrigin = (process.env.PUBLIC_URL || process.env.RENDER_EXTERNAL_URL || '').replace(/\/$/, '');
-        const hasProfileImage = !!profileImageCache.get(String(authUser).toLowerCase());
-        const avatarURL = publicOrigin && hasProfileImage
+        const avatarURL = publicOrigin
           ? `${publicOrigin}/api/profile/${encodeURIComponent(authUser)}/image`
           : null;
         activeClients.get(authUser).mode = 'discord';

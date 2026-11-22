@@ -5,7 +5,10 @@ let callback = msg => log('Discord bot received a message:', msg)
 let send2General
 let accountWebhook
 
-const dc = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent] })
+const dc = new Client({
+  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent],
+  rest: { rejectOnRateLimit: ['/webhooks', '/channels/:id/messages'] },
+})
 let general
 
 function discordErrorDetails(error) {
@@ -13,6 +16,7 @@ function discordErrorDetails(error) {
 }
 
 dc.on(Events.Error, error => log('Discord gateway error:', discordErrorDetails(error)));
+dc.rest.on('rateLimited', info => log(`Discord rate limited: route=${info.route} global=${info.global} retryAfter=${info.retryAfter}ms`));
 dc.on('warn', warning => log('Discord gateway warning:', warning));
 dc.on('shardDisconnect', (event, shardId) => log(`Discord shard disconnected: shard=${shardId} code=${event.code} reason=${event.reason || '(none)'}`));
 dc.on('shardReconnecting', shardId => log(`Discord shard reconnecting: shard=${shardId}`));
@@ -111,18 +115,34 @@ export async function initDiscord(inboundCallback) {
           send2General = payload => {
             const startedAt = Date.now();
             log(`Discord outbound start: transport=${accountWebhook && typeof payload === 'object' ? 'webhook' : 'bot'} contentLength=${String(payload.content || '').length} avatar=${!!payload.avatarURL}`)
-            if (!accountWebhook || typeof payload !== 'object')
-              return general.send(typeof payload === 'string' ? payload : payload.content)
-                .then(message => { log(`Discord outbound success: message=${message.id} elapsed=${Date.now() - startedAt}ms`); return message; })
-                .catch(error => { log(`Discord bot send failed after ${Date.now() - startedAt}ms:`, discordErrorDetails(error)); throw error; });
-            return accountWebhook.send(payload).catch(error => {
-              if (!payload.avatarURL) throw error;
-              log('Discord webhook send failed with avatar; retrying without avatar:', discordErrorDetails(error));
-              const fallback = { ...payload };
-              delete fallback.avatarURL;
-              return accountWebhook.send(fallback);
-            }).then(message => { log(`Discord outbound success: message=${message.id} elapsed=${Date.now() - startedAt}ms`); return message; })
-              .catch(error => { log(`Discord webhook send failed after ${Date.now() - startedAt}ms:`, discordErrorDetails(error)); throw error; });
+            const content = typeof payload === 'string' ? payload : payload.content;
+            const userContent = typeof payload === 'object' && payload.username
+              ? `[${payload.username}]: ${content}`
+              : content;
+            const sendAsBot = () => general.send(userContent)
+              .then(message => { log(`Discord bot fallback success: message=${message.id} elapsed=${Date.now() - startedAt}ms`); return message; })
+              .catch(error => { log(`Discord bot send failed after ${Date.now() - startedAt}ms:`, discordErrorDetails(error)); throw error; });
+            if (!accountWebhook || typeof payload !== 'object') return sendAsBot();
+            return accountWebhook.send(payload).then(message => {
+              log(`Discord outbound success: message=${message.id} elapsed=${Date.now() - startedAt}ms`);
+              return message;
+            }).catch(error => {
+              if (error.name && error.name.indexOf('RateLimitError[') === 0) {
+                log('Discord webhook rate limit; sending through the bot account instead.');
+                return sendAsBot();
+              }
+              if (payload.avatarURL && error.status === 400) {
+                log('Discord rejected the avatar URL; retrying this message without an avatar.');
+                const fallback = { ...payload };
+                delete fallback.avatarURL;
+                return accountWebhook.send(fallback).then(message => {
+                  log(`Discord outbound success without avatar: message=${message.id} elapsed=${Date.now() - startedAt}ms`);
+                  return message;
+                });
+              }
+              log(`Discord webhook send failed after ${Date.now() - startedAt}ms:`, discordErrorDetails(error));
+              throw error;
+            });
           }
           res(send2General)
           } catch (error) {
