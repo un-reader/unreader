@@ -81,7 +81,7 @@ export async function initDiscord(inboundCallback) {
     },
     send:
       await new Promise(res => {
-        dc.on(Events.ClientReady, async client => {
+        const ready = async client => {
           general = await client.channels.fetch(process.env.DISCORD_CHANNEL_ID)
           try {
             const hooks = await general.fetchWebhooks()
@@ -102,7 +102,9 @@ export async function initDiscord(inboundCallback) {
             });
           }
           res(send2General)
-        })
+        }
+        if (dc.isReady()) ready(dc)
+        else dc.once(Events.ClientReady, ready)
       })
   }
 }
