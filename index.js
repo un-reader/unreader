@@ -86,6 +86,21 @@ app.use((req, res, next) => {
   res.on('finish', () => log(`HTTP ${req.method} ${req.path} ${res.statusCode} ${Date.now() - started}ms`));
   next();
 });
+const profileImageCache = new Map();
+function cacheProfileImage(username, imageData) {
+  const key = String(username || '').replace(/^@+/, '').toLowerCase();
+  if (!key) return;
+  profileImageCache.delete(key);
+  profileImageCache.set(key, imageData ? Buffer.from(imageData, 'base64') : null);
+  if (profileImageCache.size > 32) profileImageCache.delete(profileImageCache.keys().next().value);
+}
+// shortcut: cache only the latest 32 looked-up avatars; enlarge if they are evicted before a Discord send.
+// Discord fetches webhook avatars during delivery; this endpoint must not wait on PostgreSQL.
+app.get('/api/profile/:username/image', (req, res) => {
+  const image = profileImageCache.get(sanitizeUsername(req.params.username).replace(/^@+/, '').toLowerCase());
+  if (!image) return res.sendStatus(404);
+  res.type('png').set('Cache-Control', 'public, max-age=300').send(image);
+});
 app.post('/internal/database', (req, res, next) => {
   if (!db.rpc || !coordinatorAuthorized(req.headers.authorization, process.env.DB_COORDINATOR_SECRET))
     return res.sendStatus(404);
@@ -2265,7 +2280,7 @@ app.get('/api/profile/:username', authenticateToken, async (req, res) => {
       `SELECT image_data FROM profile_images WHERE LOWER(TRIM(LEADING '@' FROM username)) = LOWER($1) ORDER BY (username = $1) DESC LIMIT 1;`,
       [targetUsername],
     );
-    return res.json({
+    const profile = {
       username: targetUsername,
       bio: 'Hello world.',
       location: 'Cyberspace',
@@ -2273,19 +2288,12 @@ app.get('/api/profile/:username', authenticateToken, async (req, res) => {
       image_data: image.rows[0]?.image_data || null,
       is_admin: false,
       is_moderator: false,
-    });
+    };
+    cacheProfileImage(targetUsername, profile.image_data);
+    return res.json(profile);
   }
+  cacheProfileImage(targetUsername, r.rows[0].image_data);
   res.json(r.rows[0]);
-});
-
-app.get('/api/profile/:username/image', async (req, res) => {
-  const username = sanitizeUsername(req.params.username);
-  const result = await db.query(
-    'SELECT image_data FROM profile_images WHERE LOWER(TRIM(LEADING \'@\' FROM username)) = LOWER($1) ORDER BY (username = $1) DESC LIMIT 1;',
-    [username],
-  );
-  if (!result.rows[0]?.image_data) return res.sendStatus(404);
-  res.type('png').set('Cache-Control', 'public, max-age=300').send(Buffer.from(result.rows[0].image_data, 'base64'));
 });
 
 app.post('/api/profile', authenticateToken, async (req, res) => {
@@ -2323,6 +2331,7 @@ app.post('/api/profile', authenticateToken, async (req, res) => {
       [req.user.username, image_data],
     );
   }
+  if (image_data !== undefined && image_data !== null) cacheProfileImage(req.user.username, image_data);
   res.json({ success: true });
 });
 
@@ -2443,6 +2452,7 @@ app.put(
         [user.rows[0].username, imageData],
       );
     }
+    cacheProfileImage(row ? row.username : target, imageData);
     await db.query(
       'INSERT INTO mod_logs (mod_username, action_type, target_username, reason, timestamp) VALUES ($1, $2, $3, $4, $5);',
       [
@@ -2473,6 +2483,7 @@ app.delete(
     await db.query('DELETE FROM profile_images WHERE username = $1;', [
       existing.rows[0].username,
     ]);
+    cacheProfileImage(existing.rows[0].username, null);
     await db.query(
       'INSERT INTO mod_logs (mod_username, action_type, target_username, reason, timestamp) VALUES ($1, $2, $3, $4, $5);',
       [
@@ -3209,8 +3220,7 @@ app.get('/dm-history', authenticateToken, async (req, res) => {
 app.get('/discord-history', authenticateToken, async (req, res) => {
   if (!discord) return res.status(503).json({ error: 'Discord history is unavailable on this deployment.' });
   try {
-    const page = Math.max(0, parseInt(req.query.index ?? '0', 10) || 0);
-    res.json(await discord.history(page));
+    res.json(await discord.history());
   } catch (error) {
     log('Discord history failure:', error.message);
     res.status(503).json({ error: 'Discord history is temporarily unavailable.' });
@@ -4812,7 +4822,8 @@ wss.on('connection', (ws, req) => {
           return;
         }
         const publicOrigin = (process.env.PUBLIC_URL || process.env.RENDER_EXTERNAL_URL || '').replace(/\/$/, '');
-        const avatarURL = publicOrigin
+        const hasProfileImage = !!profileImageCache.get(String(authUser).toLowerCase());
+        const avatarURL = publicOrigin && hasProfileImage
           ? `${publicOrigin}/api/profile/${encodeURIComponent(authUser)}/image`
           : null;
         activeClients.get(authUser).mode = 'discord';

@@ -64,17 +64,6 @@
       font-weight: bold;
     }
 
-    .page-btn {
-      background: #ffffff;
-      border: var(--border);
-      padding: 2px 8px;
-      font-family: monospace;
-      font-weight: bold;
-      cursor: pointer;
-      font-size: 11px;
-      box-shadow: 1px 1px 0 black;
-    }
-
     .message-container {
       width: 100%;
       margin-bottom: 10px;
@@ -556,11 +545,6 @@
         </div>
       </div>
       <div id='chat-cell'>
-        <div id='discord-history-bar' style='padding:6px; background:#eee; border-bottom:2px solid black; text-align:center;'>
-          <button id='discord-newer' class='page-btn' type='button' disabled>&lt; NEWER</button>
-          <span id='discord-page' style='margin:0 10px;'>PAGE: 0</span>
-          <button id='discord-older' class='page-btn' type='button'>OLDER &gt;</button>
-        </div>
         <div id='chat-scroll-wrapper'></div>
 
         <div id='input-bar-container'>
@@ -584,7 +568,6 @@
       var replyTarget = null;
       var messageAckWaiters = Object.create(null);
       var messageAckSequence = 0;
-      var discordHistoryPage = 0;
       var discordProfilePictures = Object.create(null);
       var userRoles = {
         role: {
@@ -695,7 +678,7 @@
               show('#kick-all-btn')
             }
             socket.send(JSON.stringify({ type: 'switch_context', mode: 'discord', target: '' }));
-            loadDiscordHistory(0);
+            loadDiscordHistory();
             return;
           }
           if (data.type === "error_alert") {
@@ -747,13 +730,9 @@
         }
       }
 
-      function loadDiscordHistory(page) {
-        page = Math.max(0, page || 0);
-        discordHistoryPage = page;
-        document.getElementById('discord-page').textContent = 'PAGE: ' + page;
-        document.getElementById('discord-newer').disabled = page === 0;
+      function loadDiscordHistory() {
         var xhr = new XMLHttpRequest();
-        xhr.open('GET', BACKEND_URL + '/discord-history?index=' + encodeURIComponent(page), true);
+        xhr.open('GET', BACKEND_URL + '/discord-history', true);
         xhr.setRequestHeader('Authorization', 'Bearer ' + token);
         xhr.onreadystatechange = function () {
           if (xhr.readyState !== 4 || xhr.status !== 200) return;
@@ -761,13 +740,9 @@
           wrapper.innerHTML = '';
           var messages = JSON.parse(xhr.responseText);
           for (var i = 0; i < messages.length; i++) appendMessage(messages[i]);
-          document.getElementById('discord-older').disabled = messages.length < 10;
         };
         xhr.send();
       }
-
-      document.getElementById('discord-newer').onclick = function () { loadDiscordHistory(discordHistoryPage - 1); };
-      document.getElementById('discord-older').onclick = function () { loadDiscordHistory(discordHistoryPage + 1); };
 
       let screenShareReceivingInterval;
 

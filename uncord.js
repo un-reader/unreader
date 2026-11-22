@@ -79,12 +79,11 @@ export async function initDiscord(inboundCallback) {
   log(`Discord login accepted: bot=${dc.user?.tag || dc.user?.username || 'unknown'}`);
   callback = inboundCallback
   return {
-    history: async function (page = 0) {
+    history: async function () {
       if (!general) throw new Error('Discord channel is not ready.');
-      log(`Discord history request: page=${page}`);
-      const messages = [...(await general.messages.fetch({ limit: 100 })).values()];
-      const start = Math.max(0, Number(page) || 0) * 10;
-      return messages.slice(start, start + 10).reverse().map(formatDiscordMessage);
+      log('Discord history request: latest 5');
+      const messages = [...(await general.messages.fetch({ limit: 5 })).values()];
+      return messages.reverse().map(formatDiscordMessage);
     },
     profile: async function (userId) {
       const user = await dc.users.fetch(userId);
@@ -110,18 +109,20 @@ export async function initDiscord(inboundCallback) {
             log('Discord webhook unavailable; using the bot identity:', discordErrorDetails(error))
           }
           send2General = payload => {
+            const startedAt = Date.now();
             log(`Discord outbound start: transport=${accountWebhook && typeof payload === 'object' ? 'webhook' : 'bot'} contentLength=${String(payload.content || '').length} avatar=${!!payload.avatarURL}`)
             if (!accountWebhook || typeof payload !== 'object')
               return general.send(typeof payload === 'string' ? payload : payload.content)
-                .then(message => { log(`Discord outbound success: message=${message.id}`); return message; })
-                .catch(error => { log('Discord bot send failed:', discordErrorDetails(error)); throw error; });
+                .then(message => { log(`Discord outbound success: message=${message.id} elapsed=${Date.now() - startedAt}ms`); return message; })
+                .catch(error => { log(`Discord bot send failed after ${Date.now() - startedAt}ms:`, discordErrorDetails(error)); throw error; });
             return accountWebhook.send(payload).catch(error => {
-              if (!payload.avatarURL) { log('Discord webhook send failed:', discordErrorDetails(error)); throw error; }
+              if (!payload.avatarURL) throw error;
               log('Discord webhook send failed with avatar; retrying without avatar:', discordErrorDetails(error));
               const fallback = { ...payload };
               delete fallback.avatarURL;
               return accountWebhook.send(fallback);
-            }).then(message => { log(`Discord outbound success: message=${message.id}`); return message; });
+            }).then(message => { log(`Discord outbound success: message=${message.id} elapsed=${Date.now() - startedAt}ms`); return message; })
+              .catch(error => { log(`Discord webhook send failed after ${Date.now() - startedAt}ms:`, discordErrorDetails(error)); throw error; });
           }
           res(send2General)
           } catch (error) {
