@@ -4793,15 +4793,25 @@ wss.on('connection', (ws, req) => {
       }
 
       if (data.type === 'discord_message') {
+        if (!discord || typeof discord.send !== 'function') {
+          ws.send(JSON.stringify({ type: 'error_alert', message: 'Discord bridge is unavailable on the server.' }));
+          return;
+        }
         const publicOrigin = (process.env.PUBLIC_URL || process.env.RENDER_EXTERNAL_URL || '').replace(/\/$/, '');
         const avatarURL = publicOrigin
           ? `${publicOrigin}/api/profile/${encodeURIComponent(authUser)}/image`
           : null;
-        await discord.send({
-          content: data.content,
-          username: authUser,
-          ...(avatarURL ? { avatarURL } : {}),
-        });
+        try {
+          await discord.send({
+            content: data.content,
+            username: authUser,
+            ...(avatarURL ? { avatarURL } : {}),
+          });
+        } catch (error) {
+          log('Discord bridge send failed:', error.message);
+          ws.send(JSON.stringify({ type: 'error_alert', message: 'Discord rejected the message. Check the bot channel permissions.' }));
+          return;
+        }
         activeClients.get(authUser).mode = 'discord'
       }
 

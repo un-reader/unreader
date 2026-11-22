@@ -91,8 +91,15 @@ export async function initDiscord(inboundCallback) {
             log('Discord webhook unavailable; using the bot identity:', error.message)
           }
           send2General = payload => {
-            if (accountWebhook && typeof payload === 'object') return accountWebhook.send(payload)
-            return general.send(typeof payload === 'string' ? payload : payload.content)
+            if (!accountWebhook || typeof payload !== 'object')
+              return general.send(typeof payload === 'string' ? payload : payload.content);
+            return accountWebhook.send(payload).catch(error => {
+              if (!payload.avatarURL) throw error;
+              log('Discord avatar rejected; retrying message without avatar:', error.message);
+              const fallback = { ...payload };
+              delete fallback.avatarURL;
+              return accountWebhook.send(fallback);
+            });
           }
           res(send2General)
         })
