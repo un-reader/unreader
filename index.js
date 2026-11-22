@@ -4185,9 +4185,7 @@ const ircWss = new WebSocketServer({ noServer: true, maxPayload: 4096 });
 // IRC convention uses 6665–6669; 6697 is the standard TLS port, with 7000/7070 also offered by some networks.
 const ircTlsPorts = new Set([6665, 6666, 6667, 6668, 6669, 6697, 7000, 7070]);
 
-const discord = !process.env.NETLIFY && !process.env.AWS_LAMBDA_FUNCTION_NAME && process.env.DISCORD_TOKEN
-  ? await initDiscord(discordMessageHandler)
-  : null;
+let discord = null;
 function discordMessageHandler(message) {
   activeClients.forEach((v, k) => {
     if (v.mode === 'discord') {
@@ -4197,6 +4195,12 @@ function discordMessageHandler(message) {
       }))
     }
   })
+}
+
+if (server && process.env.DISCORD_TOKEN) {
+  initDiscord(discordMessageHandler)
+    .then((client) => { discord = client; })
+    .catch((error) => log('Discord bridge startup failed; HTTP server remains available:', error.message));
 }
 
 if (server) {
