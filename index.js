@@ -36,6 +36,8 @@ function sanitizeUsername(username) {
 }
 
 const db = createDatabase({ log });
+log(`Runtime: node=${process.version} platform=${process.env.RENDER ? 'Render' : process.env.NETLIFY ? 'Netlify' : 'local'} port=${process.env.PORT || 10000}`);
+log(`Configuration: database=${process.env.DB_COORDINATOR_URL ? 'coordinator' : [process.env.NEON_DB_URL && 'Neon', process.env.LB_DB_URL && 'Layerbase'].filter(Boolean).join('+') || 'local-default'} Discord=${process.env.DISCORD_TOKEN ? 'configured' : 'not configured'} publicURL=${process.env.PUBLIC_URL || process.env.RENDER_EXTERNAL_URL ? 'configured' : 'not configured'}`);
 
 const USER_ROLE_CACHE_TTL = Number(process.env.USER_ROLE_CACHE_TTL_MS || 30000);
 const userRoleCache = new Map();
@@ -68,6 +70,7 @@ async function initDatabase() {
     log('Verifying structural integrity...');
     await db.initialize();
     log('Structural migration successful.');
+    return true;
   } catch (err) {
     log('DB MIGRATION FAILURE:', err);
     if (process.env.NETLIFY) return false;
@@ -78,6 +81,11 @@ const databaseReady = initDatabase();
 
 const app = express();
 app.set('trust proxy', true);
+app.use((req, res, next) => {
+  const started = Date.now();
+  res.on('finish', () => log(`HTTP ${req.method} ${req.path} ${res.statusCode} ${Date.now() - started}ms`));
+  next();
+});
 app.post('/internal/database', (req, res, next) => {
   if (!db.rpc || !coordinatorAuthorized(req.headers.authorization, process.env.DB_COORDINATOR_SECRET))
     return res.sendStatus(404);
