@@ -4,6 +4,8 @@ import { log } from './shared.js';
 let callback = msg => log('Discord bot received a message:', msg)
 let send2General
 let accountWebhook
+const discordUsers = new Map();
+const discordUsernames = new Map();
 
 const dc = new Client({
   intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent],
@@ -13,6 +15,45 @@ let general
 
 function discordErrorDetails(error) {
   return JSON.stringify({ name: error.name, code: error.code, status: error.status, message: error.message, method: error.method, url: error.url });
+}
+
+function rememberDiscordUser(user) {
+  if (!user || !user.id || !user.username || user.bot) return null;
+  const record = {
+    id: user.id,
+    username: user.username,
+    display_name: user.globalName || user.displayName || user.username,
+    avatar_url: user.displayAvatarURL({ extension: 'png', size: 64 }),
+  };
+  const previous = discordUsers.get(record.id);
+  if (previous && discordUsernames.get(previous.username.toLowerCase()) === record.id)
+    discordUsernames.delete(previous.username.toLowerCase());
+  discordUsers.delete(record.id);
+  discordUsers.set(record.id, record);
+  discordUsernames.set(record.username.toLowerCase(), record.id);
+  if (discordUsers.size > 200) {
+    const oldestId = discordUsers.keys().next().value;
+    const oldest = discordUsers.get(oldestId);
+    discordUsers.delete(oldestId);
+    if (oldest && discordUsernames.get(oldest.username.toLowerCase()) === oldestId)
+      discordUsernames.delete(oldest.username.toLowerCase());
+  }
+  return record;
+}
+
+function resolveDiscordMentions(content) {
+  const userIds = [];
+  const resolvedContent = String(content || '').replace(/(^|[^A-Za-z0-9_.])@([A-Za-z0-9_.-]{2,32})\b/g, (match, before, username) => {
+    const userId = discordUsernames.get(username.toLowerCase());
+    if (!userId) return match;
+    if (userIds.indexOf(userId) < 0) userIds.push(userId);
+    return `${before}<@${userId}>`;
+  }).replace(/<@!?([0-9]+)>/g, (match, userId) => {
+    if (!discordUsers.has(userId)) return match;
+    if (userIds.indexOf(userId) < 0) userIds.push(userId);
+    return `<@${userId}>`;
+  });
+  return { content: resolvedContent, userIds };
 }
 
 dc.on(Events.Error, error => log('Discord gateway error:', discordErrorDetails(error)));
@@ -26,6 +67,11 @@ function formatDiscordMessage(message) {
   const attachments = [...message.attachments.values()].map(file => file.url);
   const raw = [message.cleanContent || message.content || '', ...attachments].filter(Boolean).join('\n');
   const match = raw.match(/^\[([^\]]+)\]:\s*([\s\S]*)$/);
+  rememberDiscordUser(message.author);
+  const mentionedUsers = [...message.mentions.users.values()].map(rememberDiscordUser).filter(Boolean);
+  const referenced = message.referencedMessage;
+  const referencedRaw = referenced && (referenced.cleanContent || referenced.content || '');
+  const referencedMatch = referencedRaw && referencedRaw.match(/^\[([^\]]+)\]:\s*([\s\S]*)$/);
   return {
     id: message.id,
     username: match ? match[1] : message.author.displayName,
@@ -33,6 +79,14 @@ function formatDiscordMessage(message) {
     discord_user_id: message.author.id,
     discord_display_name: message.author.displayName,
     discord_username: message.author.username,
+    avatar_url: message.author.displayAvatarURL({ extension: 'png', size: 64 }),
+    mentioned_users: mentionedUsers,
+    reply_to: message.reference && message.reference.messageId ? {
+      id: message.reference.messageId,
+      username: referencedMatch ? referencedMatch[1] : referenced ? referenced.author.displayName : 'Discord user',
+      content: referenced ? (referencedMatch ? referencedMatch[2] : referencedRaw) : '',
+      unavailable: !referenced,
+    } : null,
     is_unreader_account: !!match,
     content: match ? match[2] : raw,
     timestamp: message.createdTimestamp,
@@ -116,14 +170,25 @@ export async function initDiscord(inboundCallback) {
             const startedAt = Date.now();
             log(`Discord outbound start: transport=${accountWebhook && typeof payload === 'object' ? 'webhook' : 'bot'} contentLength=${String(payload.content || '').length} avatar=${!!payload.avatarURL}`)
             const content = typeof payload === 'string' ? payload : payload.content;
+            const resolved = resolveDiscordMentions(content);
+            const replyContext = typeof payload === 'object' && payload.replyTo && payload.replyContext;
+            const replyQuote = replyContext
+              ? `> Replying to @${String(replyContext.username || 'Discord user').replace(/[\r\n]/g, ' ').slice(0, 64)}: ${String(replyContext.content || '').replace(/[\r\n]+/g, ' ').slice(0, 180)}\n\n`
+              : '';
+            const outboundContent = replyQuote + resolved.content;
             const userContent = typeof payload === 'object' && payload.username
-              ? `[${payload.username}]: ${content}`
-              : content;
-            const sendAsBot = () => general.send(userContent)
+              ? `[${payload.username}]: ${outboundContent}`
+              : outboundContent;
+            const allowedMentions = { parse: [], users: resolved.userIds };
+            const sendAsBot = () => general.send({ content: userContent, allowedMentions })
               .then(message => { log(`Discord bot fallback success: message=${message.id} elapsed=${Date.now() - startedAt}ms`); return message; })
               .catch(error => { log(`Discord bot send failed after ${Date.now() - startedAt}ms:`, discordErrorDetails(error)); throw error; });
             if (!accountWebhook || typeof payload !== 'object') return sendAsBot();
-            return accountWebhook.send(payload).then(message => {
+            const webhookPayload = { ...payload, content: outboundContent, allowedMentions };
+            delete webhookPayload.replyTo;
+            delete webhookPayload.replyContext;
+            const webhookSend = accountWebhook.send.bind(accountWebhook);
+            return webhookSend(webhookPayload).then(message => {
               log(`Discord outbound success: message=${message.id} elapsed=${Date.now() - startedAt}ms`);
               return message;
             }).catch(error => {
@@ -133,9 +198,9 @@ export async function initDiscord(inboundCallback) {
               }
               if (payload.avatarURL && error.status === 400) {
                 log('Discord rejected the avatar URL; retrying this message without an avatar.');
-                const fallback = { ...payload };
+                const fallback = { ...webhookPayload };
                 delete fallback.avatarURL;
-                return accountWebhook.send(fallback).then(message => {
+                return webhookSend(fallback).then(message => {
                   log(`Discord outbound success without avatar: message=${message.id} elapsed=${Date.now() - startedAt}ms`);
                   return message;
                 });

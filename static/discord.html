@@ -113,6 +113,7 @@
       display: block;
       clear: both;
       margin: 2px 0 4px;
+      min-height: 48px;
       font-size: 10px;
     }
 
@@ -130,16 +131,13 @@
       min-width: 0;
     }
 
-    #reply-context {
+    #discord-reply-context {
       order: -1;
       flex: 0 0 100%;
       width: 100%;
       min-width: 0;
       box-sizing: border-box;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 8px;
+      display: block;
       margin-bottom: 6px;
       padding: 5px;
       border: 1px dashed black;
@@ -148,13 +146,39 @@
       font-size: 12px;
     }
 
-    #reply-context[hidden] {
+    #discord-reply-context[hidden],
+    #discord-mention-list[hidden] {
       display: none;
     }
 
-    #reply-context-text {
-      flex: 1;
-      min-width: 0;
+    #discord-reply-context-text {
+      display: inline-block;
+      max-width: 82%;
+      overflow-wrap: anywhere;
+    }
+
+    #discord-mention-list {
+      order: -1;
+      flex: 0 0 100%;
+      width: 100%;
+      max-height: 144px;
+      box-sizing: border-box;
+      overflow-y: auto;
+      margin-bottom: 5px;
+      border: 2px solid black;
+      background: #eee;
+    }
+
+    .discord-mention-option {
+      display: block;
+      width: 100%;
+      min-height: 48px;
+      box-sizing: border-box;
+      border: 0;
+      border-bottom: 1px solid #888;
+      background: white;
+      text-align: left;
+      white-space: normal;
       overflow-wrap: anywhere;
     }
 
@@ -548,7 +572,9 @@
         <div id='chat-scroll-wrapper'></div>
 
         <div id='input-bar-container'>
-          <textarea class='paper-input shadow' id='content' placeholder="Type message here..." autocomplete='off'
+          <div id='discord-reply-context' hidden><span id='discord-reply-context-text'></span> <button class='paper-btn' type='button' onclick='clearDiscordReplyTarget()'>CANCEL</button></div>
+          <div id='discord-mention-list' hidden></div>
+          <textarea class='paper-input shadow' id='content' placeholder="Type message here... (@user to ping)" autocomplete='off'
             autofocus></textarea>
           <button id='send' class='paper-btn shadow'>SEND</button>
         </div>
@@ -569,6 +595,8 @@
       var messageAckWaiters = Object.create(null);
       var messageAckSequence = 0;
       var discordProfilePictures = Object.create(null);
+      // shortcut: suggestions cover users in the latest five messages and live chat; add guild search if broader lookup is needed.
+      var knownDiscordUsers = Object.create(null);
       var userRoles = {
         role: {
           role: '',
@@ -704,6 +732,11 @@
           }
           if (data.type === "discord_message") {
             appendMessage(data.message)
+            return;
+          }
+          if (data.type === 'discord_send_success') {
+            markDiscordMessageSent(data);
+            return;
           }
 
           if (data.type === 'scrshare_frame') {
@@ -839,9 +872,14 @@
         var chatWrapper = document.getElementById("chat-scroll-wrapper");
         var containerDiv = document.createElement("div");
         containerDiv.className = "message-container";
+        if (data.client_message_id) containerDiv.dataset.clientMessageId = data.client_message_id;
         var msgDiv = document.createElement("div");
         msgDiv.id = "msg-id-" + Math.random() * 10000000; // Quick drop-in replacement for an ID
         var effectiveUsername = data.username || data.sender || "UNKNOWN_NODE";
+        if (data.discord_user_id && !data.is_unreader_account && data.discord_username) {
+          rememberDiscordUser({ id: data.discord_user_id, username: data.discord_username, display_name: data.discord_display_name || data.discord_username });
+        }
+        (data.mentioned_users || []).forEach(rememberDiscordUser);
         msgDiv.dataset.username = effectiveUsername;
         var isMe = data.isMe ?? effectiveUsername === myUsername;
         msgDiv.style.float = isMe ? "right" : "left";
@@ -857,9 +895,11 @@
         meta.style.cursor = "pointer";
 
         var nameDisplay = "@" + effectiveUsername;
+        var savedProfilePicture = profilePictureDataUrl(discordProfilePictures[effectiveUsername]);
         var profilePicture = createProfilePicture(discordProfilePictures[effectiveUsername] || null);
+        if (data.avatar_url && !savedProfilePicture) profilePicture.src = data.avatar_url;
         meta.appendChild(profilePicture);
-        if (!Object.prototype.hasOwnProperty.call(discordProfilePictures, effectiveUsername)) {
+        if ((data.is_unreader_account || data.isMe) && !Object.prototype.hasOwnProperty.call(discordProfilePictures, effectiveUsername)) {
           discordProfilePictures[effectiveUsername] = null;
           var profileXhr = new XMLHttpRequest();
           profileXhr.open('GET', BACKEND_URL + '/api/profile/' + encodeURIComponent(effectiveUsername), true);
@@ -887,6 +927,14 @@
         txtBody.className = "message-text";
         txtBody.innerHTML = censor(parseMarkup(data.content));
         msgDiv.appendChild(meta);
+        if (data.reply_to) {
+          var quote = document.createElement('div');
+          quote.className = 'reply-quote';
+          quote.textContent = data.reply_to.unavailable
+            ? 'Reply to a Discord message'
+            : 'Reply to @' + data.reply_to.username + ': ' + String(data.reply_to.content || '').replace(/\s+/g, ' ').slice(0, 180);
+          msgDiv.appendChild(quote);
+        }
         msgDiv.appendChild(txtBody);
 
         if (data.discord_url) {
@@ -903,15 +951,9 @@
         }
 
         containerDiv.appendChild(msgDiv);
-        // if (!data.is_deleted && Number(data.id) > 0) {
-        //   var replyButton = document.createElement("button");
-        //   replyButton.type = "button";
-        //   replyButton.className = "paper-btn message-reply-button";
-        //   replyButton.textContent = "REPLY";
-        //   replyButton.style.float = isMe ? "right" : "left";
-        //   replyButton.onclick = function () { setReplyTarget(data); };
-        //   containerDiv.appendChild(replyButton);
-        // }
+        containerDiv._discordMessageData = data;
+        containerDiv._discordMessageElement = msgDiv;
+        if (data.id) addDiscordReplyButton(containerDiv, data, isMe);
         // if (!data.is_deleted) renderMessageReactions(containerDiv, data, socket);
         chatWrapper.appendChild(containerDiv);
         chatWrapper.scrollTop = chatWrapper.scrollHeight;
@@ -959,18 +1001,31 @@
         if (!text || !socket || socket.readyState !== WebSocket.OPEN) return;
 
         log("Sending message:", text);
+        var clientMessageId = Date.now().toString(36) + Math.random().toString(36).slice(2);
+        var reply = replyTarget ? {
+          id: replyTarget.id,
+          username: replyTarget.username,
+          content: replyTarget.content,
+        } : null;
         socket.send(
           JSON.stringify({
             type: "discord_message",
             content: text,
+            client_message_id: clientMessageId,
+            reply_to_id: replyTarget ? replyTarget.id : null,
+            reply_to: reply,
           }),
         );
         appendMessage({
           content: text,
           username: myUsername,
-          isMe: true
+          isMe: true,
+          client_message_id: clientMessageId,
+          reply_to: reply,
         })
         input.value = "";
+        clearDiscordReplyTarget();
+        document.getElementById('discord-mention-list').hidden = true;
       }
 
       // -----------------------------------------------------------------
@@ -994,7 +1049,106 @@
       msgInput.oninput = function () {
         this.style.height = "auto";
         this.style.height = this.scrollHeight + "px";
+        updateDiscordMentionList();
       };
+
+      function rememberDiscordUser(user) {
+        if (!user || !user.id || !user.username) return;
+        knownDiscordUsers[String(user.id)] = {
+          id: String(user.id),
+          username: user.username,
+          display_name: user.display_name || user.username,
+        };
+      }
+
+      function updateDiscordMentionList() {
+        var input = document.getElementById('content');
+        var before = input.value.slice(0, input.selectionStart);
+        var match = before.match(/(?:^|\s)@([A-Za-z0-9_.-]*)$/);
+        var list = document.getElementById('discord-mention-list');
+        if (!match) {
+          list.hidden = true;
+          return;
+        }
+        var query = match[1].toLowerCase();
+        var users = Object.keys(knownDiscordUsers).map(function (id) { return knownDiscordUsers[id]; })
+          .filter(function (user) { return user.username.toLowerCase().indexOf(query) >= 0; })
+          .slice(0, 8);
+        list.innerHTML = '';
+        if (!users.length) {
+          list.hidden = true;
+          return;
+        }
+        list.hidden = false;
+        for (var i = 0; i < users.length; i++) {
+          (function (user) {
+            var option = document.createElement('button');
+            option.type = 'button';
+            option.className = 'discord-mention-option';
+            option.textContent = '@' + user.username + ' (' + user.display_name + ')';
+            option.onclick = function () {
+              var start = before.lastIndexOf('@');
+              var selectionEnd = input.selectionEnd;
+              input.value = before.slice(0, start) + '@' + user.username + ' ' + input.value.slice(selectionEnd);
+              var nextPosition = start + user.username.length + 2;
+              input.focus();
+              input.setSelectionRange(nextPosition, nextPosition);
+              input.style.height = 'auto';
+              input.style.height = input.scrollHeight + 'px';
+              list.hidden = true;
+              updateDiscordMentionList();
+            };
+            list.appendChild(option);
+          })(users[i]);
+        }
+      }
+
+      function setDiscordReplyTarget(data) {
+        replyTarget = data;
+        document.getElementById('discord-reply-context-text').textContent = 'Reply to @' + (data.username || 'Discord user') + ': ' + String(data.content || '').replace(/\s+/g, ' ').slice(0, 140);
+        document.getElementById('discord-reply-context').hidden = false;
+        document.getElementById('content').focus();
+      }
+
+      function clearDiscordReplyTarget() {
+        replyTarget = null;
+        var context = document.getElementById('discord-reply-context');
+        if (context) context.hidden = true;
+      }
+
+      function addDiscordReplyButton(container, data, isMe) {
+        if (container._discordReplyButton || !data.id) return;
+        var replyButton = document.createElement('button');
+        replyButton.type = 'button';
+        replyButton.className = 'paper-btn message-reply-button';
+        replyButton.textContent = 'REPLY';
+        replyButton.style.float = isMe ? 'right' : 'left';
+        replyButton.onclick = function () { setDiscordReplyTarget(data); };
+        container._discordReplyButton = replyButton;
+        container.appendChild(replyButton);
+      }
+
+      function markDiscordMessageSent(result) {
+        var containers = document.getElementsByClassName('message-container');
+        for (var i = 0; i < containers.length; i++) {
+          if (containers[i].dataset.clientMessageId !== result.client_message_id) continue;
+          var data = containers[i]._discordMessageData;
+          data.id = result.message_id;
+          data.discord_url = result.discord_url;
+          addDiscordReplyButton(containers[i], data, true);
+          var link = document.createElement('a');
+          link.className = 'paper-btn';
+          link.href = result.discord_url;
+          link.target = '_blank';
+          link.rel = 'noopener noreferrer';
+          link.textContent = 'OPEN IN DISCORD';
+          link.style.display = 'inline-block';
+          link.style.marginTop = '6px';
+          link.style.fontSize = '10px';
+          containers[i]._discordMessageElement.appendChild(link);
+          return;
+        }
+      }
 
       function openProfileModal(targetUser) {
         log("Pulling profile metadata for:", targetUser);

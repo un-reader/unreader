@@ -4825,12 +4825,63 @@ wss.on('connection', (ws, req) => {
         const avatarURL = publicOrigin
           ? `${publicOrigin}/api/profile/${encodeURIComponent(authUser)}/image`
           : null;
+        const replyTo = data.reply_to_id == null ? null : String(data.reply_to_id);
+        if (replyTo && !/^\d{17,20}$/.test(replyTo)) {
+          ws.send(JSON.stringify({ type: 'error_alert', message: 'That Discord reply target is invalid.' }));
+          return;
+        }
+        const content = typeof data.content === 'string' ? data.content.trim() : '';
+        if (!content || content.length > 1900) {
+          ws.send(JSON.stringify({ type: 'error_alert', message: 'Discord messages must be between 1 and 1900 characters.' }));
+          return;
+        }
+        const clientMessageId = typeof data.client_message_id === 'string' && data.client_message_id.length <= 80
+          ? data.client_message_id
+          : null;
+        const replyPreview = replyTo && data.reply_to && typeof data.reply_to === 'object'
+          ? {
+            id: replyTo,
+            username: String(data.reply_to.username || 'Discord user').slice(0, 64),
+            content: String(data.reply_to.content || '').slice(0, 180),
+          }
+          : null;
         activeClients.get(authUser).mode = 'discord';
         discord.send({
-            content: data.content,
+            content,
             username: authUser,
             ...(avatarURL ? { avatarURL } : {}),
-          }).catch(error => log('Discord bridge send failed:', error.message));
+            ...(replyTo ? { replyTo, replyContext: replyPreview } : {}),
+          }).then(message => {
+            const mirroredMessage = {
+              id: message.id,
+              username: authUser,
+              sender: authUser,
+              discord_username: authUser,
+              discord_display_name: authUser,
+              avatar_url: message.author.displayAvatarURL({ extension: 'png', size: 64 }),
+              is_unreader_account: true,
+              content,
+              timestamp: message.createdTimestamp,
+              discord_url: message.url,
+              reply_to: replyPreview,
+              isMe: false,
+              role: {},
+              reactions: [],
+            };
+            activeClients.forEach(client => {
+              if (client.ws === ws || client.mode !== 'discord' || client.ws.readyState !== WebSocket.OPEN) return;
+              client.ws.send(JSON.stringify({ type: 'discord_message', message: mirroredMessage }));
+            });
+            if (ws.readyState === WebSocket.OPEN && clientMessageId) ws.send(JSON.stringify({
+              type: 'discord_send_success',
+              client_message_id: clientMessageId,
+              message_id: message.id,
+              discord_url: message.url,
+            }));
+          }).catch(error => {
+            log('Discord bridge send failed:', error.message);
+            if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'error_alert', message: 'Discord could not send that message. Please try again.' }));
+          });
       }
 
       if (data.type === 'mod_delete' || data.type === 'mod_restore') {
