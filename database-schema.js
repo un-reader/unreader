@@ -248,6 +248,26 @@ CREATE TABLE IF NOT EXISTS doodle_scores (
 );
 CREATE INDEX IF NOT EXISTS doodle_scores_rank_idx ON doodle_scores (score DESC, updated_at ASC);
 
+CREATE TABLE IF NOT EXISTS whatbeatsrock_memory (
+  previous_key TEXT NOT NULL,
+  guess_key TEXT NOT NULL,
+  canonical_key TEXT NOT NULL,
+  beats BOOLEAN NOT NULL,
+  reason TEXT NOT NULL DEFAULT '',
+  created_at BIGINT NOT NULL,
+  PRIMARY KEY (previous_key, guess_key)
+);
+ALTER TABLE whatbeatsrock_memory ADD COLUMN IF NOT EXISTS canonical_key TEXT;
+UPDATE whatbeatsrock_memory SET canonical_key = guess_key WHERE canonical_key IS NULL;
+ALTER TABLE whatbeatsrock_memory ALTER COLUMN canonical_key SET NOT NULL;
+CREATE TABLE IF NOT EXISTS whatbeatsrock_answer_people (
+  previous_key TEXT NOT NULL,
+  canonical_key TEXT NOT NULL,
+  username TEXT NOT NULL REFERENCES users(username) ON DELETE CASCADE,
+  created_at BIGINT NOT NULL,
+  PRIMARY KEY (previous_key, canonical_key, username)
+);
+
 CREATE TABLE IF NOT EXISTS wikipedia (
   id SERIAL PRIMARY KEY,
   name TEXT UNIQUE NOT NULL,

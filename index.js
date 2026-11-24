@@ -666,6 +666,90 @@ app.post('/api/ai/cloudflare', authenticateToken, async (req, res) => {
   }
 });
 
+const whatBeatsMemoryWrites = new Map();
+async function recordWhatBeatsAnswer(previousKey, canonicalKey, username) {
+  await db.query(
+    `INSERT INTO whatbeatsrock_answer_people (previous_key, canonical_key, username, created_at)
+     VALUES ($1, $2, $3, $4) ON CONFLICT (previous_key, canonical_key, username) DO NOTHING;`,
+    [previousKey, canonicalKey, username, Date.now()],
+  );
+  const result = await db.query(
+    'SELECT COUNT(*)::integer AS people_count FROM whatbeatsrock_answer_people WHERE previous_key = $1 AND canonical_key = $2;',
+    [previousKey, canonicalKey],
+  );
+  return result.rows[0].people_count;
+}
+
+app.post('/api/whatbeatsrock/memory', authenticateToken, async (req, res) => {
+  const action = req.body?.action;
+  const previous = typeof req.body?.previous === 'string' ? req.body.previous.trim() : '';
+  const guess = typeof req.body?.guess === 'string' ? req.body.guess.trim() : '';
+  if (!['lookup', 'remember'].includes(action) || !previous || previous.length > 80 || /[\r\n\d]/.test(previous) ||
+      !guess || guess.length > 80 || /[\r\n\d]/.test(guess))
+    return res.status(400).json({ error: 'Invalid game memory request.' });
+
+  const previousKey = previous.toLowerCase().replace(/\s+/g, ' ');
+  const guessKey = guess.toLowerCase().replace(/\s+/g, ' ');
+  if (action === 'lookup') {
+    try {
+      const result = await db.query(
+        'SELECT beats, reason, canonical_key FROM whatbeatsrock_memory WHERE previous_key = $1 AND guess_key = $2;',
+        [previousKey, guessKey],
+      );
+      if (!result.rowCount) return res.json({ cached: false });
+      const canonicalKey = result.rows[0].canonical_key || guessKey;
+      const peopleCount = await recordWhatBeatsAnswer(previousKey, canonicalKey, req.user.username);
+      return res.json({ cached: true, beats: result.rows[0].beats, reason: result.rows[0].reason, canonicalKey, peopleCount });
+    } catch (error) {
+      log('What Beats Rock memory lookup failed:', error.code || error.message);
+      return res.status(503).json({ error: 'Saved game memory is unavailable.' });
+    }
+  }
+
+  const canonical = typeof req.body.canonical === 'string'
+    ? req.body.canonical.trim().toLowerCase().replace(/\s+/g, ' ').replace(/^(a|an|the) /, '')
+    : '';
+  if (!canonical || canonical.length > 80 || /[\r\n\d]/.test(canonical) ||
+      typeof req.body.beats !== 'boolean' || typeof req.body.reason !== 'string' || req.body.reason.length > 180)
+    return res.status(400).json({ error: 'Invalid game memory result.' });
+  const now = Date.now();
+  let writes = whatBeatsMemoryWrites.get(req.user.username);
+  if (writes && now - writes.startedAt >= 60000) writes = null;
+  if (writes && writes.count >= 12)
+    return res.status(429).json({ error: 'Game memory write limit reached.' });
+  whatBeatsMemoryWrites.set(req.user.username, writes
+    ? { startedAt: writes.startedAt, count: writes.count + 1 }
+    : { startedAt: now, count: 1 });
+  if (whatBeatsMemoryWrites.size > 1000) {
+    for (const [username, entry] of whatBeatsMemoryWrites) {
+      if (now - entry.startedAt >= 60000) whatBeatsMemoryWrites.delete(username);
+      if (whatBeatsMemoryWrites.size <= 800) break;
+    }
+  }
+
+  const reason = req.body.reason.replace(/[\r\n\u0000-\u001f]/g, ' ').trim();
+  try {
+    const result = await db.query(
+      `INSERT INTO whatbeatsrock_memory (previous_key, guess_key, canonical_key, beats, reason, created_at)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       ON CONFLICT (previous_key, guess_key) DO NOTHING
+       RETURNING beats, reason, canonical_key;`,
+      [previousKey, guessKey, canonical, req.body.beats, reason, now],
+    );
+    const existing = result.rowCount ? result : await db.query(
+      'SELECT beats, reason, canonical_key FROM whatbeatsrock_memory WHERE previous_key = $1 AND guess_key = $2;',
+      [previousKey, guessKey],
+    );
+    if (!existing.rowCount) return res.status(503).json({ error: 'Saved game memory could not be stored.' });
+    const canonicalKey = existing.rows[0].canonical_key || canonical;
+    const peopleCount = await recordWhatBeatsAnswer(previousKey, canonicalKey, req.user.username);
+    return res.json({ cached: true, beats: existing.rows[0].beats, reason: existing.rows[0].reason, canonicalKey, peopleCount });
+  } catch (error) {
+    log('What Beats Rock memory write failed:', error.code || error.message);
+    return res.status(503).json({ error: 'Saved game memory could not be stored.' });
+  }
+});
+
 function requestChangelogPage(page, perPage) {
   const key = `${page}:${perPage}`;
   let request = changelogRequests.get(key);

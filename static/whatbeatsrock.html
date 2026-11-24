@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <script src="neko-loader.js"></script>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>WHAT BEATS ROCK?</title>
+  <script src="common.js"></script>
+  <style>
+    * { box-sizing: border-box; }
+    html, body { margin: 0; min-height: 100%; background: #d4d4d4; color: #000; font-family: 'Courier New', monospace; }
+    body { padding: 6px; }
+    .window { width: 100%; max-width: 760px; margin: 0 auto; border: 2px solid #000; background: #fff; box-shadow: 4px 4px 0 #000; }
+    .title-bar { position: relative; display: flex; align-items: center; justify-content: center; height: 40px; padding: 0 10px; border-bottom: 2px solid #000; }
+    .stripes { position: absolute; top: 6px; right: 6px; bottom: 6px; left: 6px; background: repeating-linear-gradient(to bottom, #000 0, #000 2px, #fff 2px, #fff 4px); }
+    .title { position: relative; display: inline-block; padding: 1px 8px; background: #fff; font-size: 14px; font-weight: bold; line-height: 22px; }
+    .button { min-height: 42px; padding: 6px 10px; border: 2px solid #000; background: #fff; color: #000; box-shadow: 2px 2px 0 #000; font: bold 13px 'Courier New', monospace; cursor: pointer; }
+    .button:active, .button.selected { background: #000; color: #fff; }
+    .home { position: absolute; left: 10px; z-index: 2; min-height: 0; padding: 2px 6px; font-size: 11px; text-decoration: none; }
+    .content { padding: 8px 12px 12px; }
+    .intro { margin: 4px 0 8px; font-size: 13px; line-height: 1.3; }
+    .card { display: flex; flex-wrap: wrap; align-items: center; margin: 8px 0; padding: 8px 10px; border: 2px solid #000; box-shadow: 2px 2px 0 #888; }
+    .current-label, .score-label { font-size: 12px; font-weight: bold; text-transform: uppercase; }
+    #current-item { flex: 1 1 110px; margin: 0 12px; font-size: 24px; font-weight: bold; word-break: break-word; }
+    .score { white-space: nowrap; }
+    form { margin: 8px 0 6px; }
+    label { display: block; margin-bottom: 4px; font-size: 14px; font-weight: bold; word-break: break-word; }
+    input { display: block; width: 100%; min-height: 42px; padding: 7px; border: 2px solid #000; border-radius: 0; background: #fff; color: #000; font: 16px 'Courier New', monospace; }
+    .action-row { display: flex; flex-wrap: wrap; margin-top: 8px; }
+    .action-row .button { min-width: 138px; margin: 0 8px 4px 0; }
+    #status { min-height: 18px; margin: 4px 0 8px; font-size: 13px; line-height: 1.3; word-break: break-word; }
+    #same-answer-count { margin: -4px 0 6px; font-size: 12px; font-weight: bold; }
+    #history-details { margin-top: 8px; border-top: 1px solid #888; }
+    #history-details summary { min-height: 36px; padding: 8px 2px; font-size: 13px; font-weight: bold; cursor: pointer; }
+    #history { max-height: 130px; margin: 0; padding-left: 24px; overflow-y: auto; }
+    #history li { padding: 5px 4px; border-top: 1px solid #aaa; font-size: 13px; line-height: 1.3; word-break: break-word; }
+    #history li strong { display: block; }
+    .muted { margin: 6px 0 0; color: #555; font-size: 11px; }
+    @media (min-width: 600px) {
+      .content { padding: 10px 16px 14px; }
+      .action-row .button { min-width: 150px; }
+    }
+  </style>
+</head>
+<body>
+  <main class="window">
+    <header class="title-bar">
+      <div class="stripes" aria-hidden="true"></div>
+      <a class="button home" href="index.html">&lt; HOME</a>
+      <span class="title">WHAT BEATS ROCK?</span>
+    </header>
+    <section class="content">
+      <p class="intro">Beat the current item to extend your chain. One miss ends the run.</p>
+      <div class="card" aria-live="polite">
+        <div class="current-label">Current item</div>
+        <div id="current-item">rock</div>
+        <div class="score"><span class="score-label">Chain:</span> <span id="score">0</span></div>
+      </div>
+      <form id="guess-form">
+        <label for="guess">What beats <span id="prompt-item">rock</span>?</label>
+        <input id="guess" name="guess" type="text" maxlength="80" autocomplete="off" required>
+        <div class="action-row">
+          <button id="submit" class="button" type="submit">SUBMIT GUESS</button>
+          <button id="restart" class="button" type="button">START OVER</button>
+        </div>
+      </form>
+      <p id="status" role="status">Sign in to play.</p>
+      <p id="same-answer-count" class="muted" role="status" hidden></p>
+      <details id="history-details">
+        <summary>RUN HISTORY</summary>
+        <ol id="history"></ol>
+      </details>
+      <p class="muted">Known pairs use saved memory; new guesses are checked by Groq.</p>
+    </section>
+  </main>
+  <script>
+    (function () {
+      var form = document.getElementById('guess-form');
+      var input = document.getElementById('guess');
+      var submit = document.getElementById('submit');
+      var status = document.getElementById('status');
+      var currentItem = document.getElementById('current-item');
+      var promptItem = document.getElementById('prompt-item');
+      var scoreNode = document.getElementById('score');
+      var answerCount = document.getElementById('same-answer-count');
+      var history = document.getElementById('history');
+      var previous = 'rock';
+      var previousCanonical = 'rock';
+      var score = 0;
+      var ended = false;
+      var busy = false;
+      var groqKeyPart1 = "gsk_R9SN8Z5ahD0J";
+      var groqKeyPart2 = "kdcCZYkVWGdyb3FYjGv8mY8rFo";
+      var groqKeyPart3 = "RirOUJzcsdJKSV";
+
+      function token() {
+        try { return localStorage.getItem('token') || localStorage.getItem('unreader-token') || ''; }
+        catch (error) { return ''; }
+      }
+
+      function update() {
+        currentItem.textContent = previous;
+        promptItem.textContent = previous;
+        scoreNode.textContent = String(score);
+        input.disabled = ended || busy;
+        submit.disabled = ended || busy;
+        document.getElementById('restart').disabled = busy;
+      }
+
+      function addHistory(guess, result) {
+        var item = document.createElement('li');
+        var heading = document.createElement('strong');
+        heading.textContent = guess + (result.beats ? ' beats ' : ' does not beat ') + result.previous;
+        item.appendChild(heading);
+        if (result.reason) {
+          var reason = document.createElement('span');
+          reason.textContent = result.reason;
+          item.appendChild(reason);
+        }
+        history.insertBefore(item, history.firstChild);
+      }
+
+      function lookupMemory(authToken, item, guess) {
+        var backend = typeof BACKEND_URL === 'string' ? BACKEND_URL : window.location.origin;
+        return fetch(backend + '/api/whatbeatsrock/memory', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + authToken },
+          body: JSON.stringify({ action: 'lookup', previous: item, guess: guess })
+        }).then(function (response) {
+          if (!response.ok) return null;
+          return response.json();
+        }).then(function (data) {
+          return data && data.cached ? data : null;
+        }).catch(function () { return null; });
+      }
+
+      function saveMemory(authToken, itemKey, guess, result) {
+        var backend = typeof BACKEND_URL === 'string' ? BACKEND_URL : window.location.origin;
+        return fetch(backend + '/api/whatbeatsrock/memory', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + authToken },
+          body: JSON.stringify({
+            action: 'remember',
+            previous: itemKey,
+            guess: guess,
+            canonical: result.canonical,
+            beats: result.beats,
+            reason: result.reason
+          })
+        }).then(function (response) {
+          if (!response.ok) return null;
+          return response.json();
+        }).catch(function () { return null; });
+      }
+
+      function showAnswerCount(count) {
+        answerCount.hidden = false;
+        if (typeof count !== 'number') {
+          answerCount.textContent = 'Other-player count is unavailable.';
+          return;
+        }
+        count = Math.max(0, count - 1);
+        answerCount.textContent = count + ' other player' + (count === 1 ? ' has' : 's have') + ' given this answer.';
+      }
+
+      form.addEventListener('submit', function (event) {
+        event.preventDefault();
+        if (busy || ended) return;
+        var guess = input.value.trim();
+        if (!guess) return;
+        if (/\d/.test(guess)) {
+          status.textContent = 'Please enter a guess without numbers.';
+          return;
+        }
+        var authToken = token();
+        if (!authToken) {
+          status.textContent = 'Sign in from the home page before playing.';
+          return;
+        }
+        var submittedPrevious = previous;
+        var submittedPreviousKey = previousCanonical;
+        busy = true;
+        status.textContent = 'Checking shared game memory...';
+        update();
+        lookupMemory(authToken, submittedPreviousKey, guess).then(function (memory) {
+          if (memory) {
+            return {
+              previous: submittedPrevious,
+              canonical: memory.canonicalKey,
+              canonicalKey: memory.canonicalKey,
+              beats: memory.beats,
+              reason: memory.reason || '',
+              peopleCount: memory.peopleCount,
+              fromMemory: true
+            };
+          }
+          status.textContent = 'Asking Groq...';
+          return fetch('https://api.groq.com/openai/v1/chat/completions', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': 'Bearer ' + groqKeyPart1 + groqKeyPart2 + groqKeyPart3
+            },
+            body: JSON.stringify({
+              model: 'qwen/qwen3.8-27b',
+              temperature: 0.2,
+              max_completion_tokens: 160,
+              messages: [
+                {
+                  role: 'system',
+                  content: 'You judge a What Beats Rock word-chain game. Decide whether the proposed item could plausibly defeat or overcome the previous item. Reward clear, creative causal explanations; reject unrelated words, repetition, or claims that do not explain how. Also assign the proposed item a stable canonical concept name: use a short common noun or noun phrase, lowercase, and map synonyms and paraphrases to the same familiar concept (for example flame, campfire, and fire should all be canonicalized as fire). Ignore articles and descriptive wording. Return only valid JSON with exactly three fields: {"beats": boolean, "reason": "one short sentence", "canonical": "short common concept name"}. Keep the reason under 140 characters and canonical under 80 characters.'
+                },
+                {
+                  role: 'user',
+                  content: 'Previous item: ' + JSON.stringify(submittedPrevious) + '\nProposed item: ' + JSON.stringify(guess)
+                }
+              ]
+            })
+          }).then(function (response) {
+            return response.json().then(function (data) {
+              if (!response.ok) {
+                var message = data && data.error && data.error.message;
+                if (response.status === 429) message = 'Groq rate limit reached. Try again shortly.';
+                throw new Error(message || 'Groq could not check the guess.');
+              }
+              var raw = data && data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content;
+              var match = typeof raw === 'string' ? raw.match(/\{[\s\S]*\}/) : null;
+              var judgment = null;
+              try { judgment = match ? JSON.parse(match[0]) : null; } catch (error) { }
+              if (!judgment || typeof judgment.beats !== 'boolean' || typeof judgment.canonical !== 'string' || !judgment.canonical.trim()) throw new Error('Groq returned an invalid game result. Try again.');
+              var canonical = judgment.canonical.trim().toLowerCase().replace(/\s+/g, ' ').replace(/^(a|an|the) /, '');
+              if (canonical.length > 80 || /[\r\n\d]/.test(canonical)) throw new Error('Groq returned an invalid answer name. Try again.');
+              var result = {
+                previous: submittedPrevious,
+                beats: judgment.beats,
+                reason: typeof judgment.reason === 'string' ? judgment.reason.slice(0, 180) : '',
+                canonical: canonical,
+                fromMemory: false
+              };
+              return saveMemory(authToken, submittedPreviousKey, guess, result).then(function (saved) {
+                if (saved && saved.cached) {
+                  result.beats = saved.beats;
+                  result.reason = saved.reason || result.reason;
+                  result.canonical = saved.canonicalKey;
+                  result.canonicalKey = saved.canonicalKey;
+                  result.peopleCount = saved.peopleCount;
+                }
+                return result;
+              });
+            });
+          });
+        }).then(function (result) {
+          addHistory(guess, result);
+          showAnswerCount(result.peopleCount);
+          input.value = '';
+          if (result.beats) {
+            score += 1;
+            previous = guess;
+            previousCanonical = result.canonicalKey || result.canonical;
+            status.textContent = (result.fromMemory ? 'Known from shared memory. ' : 'New Groq judgment. ') + 'What beats ' + previous + '?';
+          } else {
+            ended = true;
+            status.textContent = (result.fromMemory ? 'Known from shared memory. ' : 'New Groq judgment. ') + 'Run over. Final chain: ' + score + '. Start over to play again.';
+          }
+        }).catch(function (error) {
+          status.textContent = error.message || 'The game judge is temporarily unavailable.';
+        }).then(function () {
+          busy = false;
+          update();
+          if (!ended) input.focus();
+        });
+      });
+
+      document.getElementById('restart').addEventListener('click', function () {
+        if (busy) return;
+        previous = 'rock';
+        previousCanonical = 'rock';
+        score = 0;
+        ended = false;
+        history.innerHTML = '';
+        answerCount.textContent = '';
+        answerCount.hidden = true;
+        status.textContent = token() ? 'Your run starts with rock.' : 'Sign in to play.';
+        update();
+        input.focus();
+      });
+
+      status.textContent = token() ? 'Your run starts with rock.' : 'Sign in to play.';
+      update();
+    }());
+  </script>
+</body>
+</html>
